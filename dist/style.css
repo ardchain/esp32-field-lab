@@ -157,3 +157,21 @@
   .lesson-panel>.lesson-content { padding-top:13px; }
   .sim-status { margin-bottom:5px; }
 }
+
+/* Small, accessible links in the workbench header. */
+.social-links { display:flex; align-items:center; gap:2px; }
+.social-link {
+  display:grid;
+  place-items:center;
+  width:38px;
+  height:44px;
+  flex:0 0 38px;
+  color:#58758a;
+  border-radius:3px;
+}
+.social-link svg { width:18px; height:18px; }
+.social-link:hover { color:var(--accent-dark); background:#ece6d950; }
+.social-link:focus-visible { outline:2px solid var(--accent-dark); outline-offset:1px; }
+@media (max-width:359px) {
+  .wordmark .brand-lab,.wordmark .brand-slash { display:none; }
+}

@@ -83,6 +83,25 @@ Arduino examples target Arduino-ESP32 3.x and the original ESP32-WROOM-32. Libra
 
 Progress and preferences use localStorage. They stay in the same browser and site origin and do not sync between devices or domains.
 
+### 3D model references
+
+The models depict selected component packages and common board variants. Terminal counts, pin names and mechanical orientation follow the references below; dimensions and small details are adapted for readability. These are stylized teaching illustrations, not dimensioned CAD or assembly drawings. Piano keycaps represent the eight input switches, and breadboard wire endpoints are illustrative.
+
+| Model | Hardware reference |
+| --- | --- |
+| 30-pin ESP32 DevKit V1 | [DOIT documentation](https://github.com/SmartArduino/SZDOITWiKi/wiki/ESP8266---ESP32) and [manufacturer schematics](https://github.com/SmartArduino/ESPboard/blob/master/esp32manual.rar) |
+| ESP-WROOM-32 module | [Espressif datasheet](https://documentation.espressif.com/esp32-wroom-32_datasheet_en.html): 38 castellated terminals and PCB antenna |
+| USB bridge and regulator | [CP2102 QFN28](https://www.silabs.com/documents/public/data-sheets/CP2102-9.pdf), [1117 SOT-223 package](https://www.onsemi.com/pdf/datasheet/ncp1117-d.pdf) |
+| Common-cathode RGB LED | [Kingbright four-lead LED](https://www.kingbrightusa.com/images/catalog/SPEC/WP154A4SUREQBFZGC.pdf) |
+| Ultrasonic module | [Classic 5 V HC-SR04](https://cdn.sparkfun.com/datasheets/Sensors/Proximity/HCSR04.pdf) |
+| Temperature and humidity sensor | [Aosong DHT22 / AM2302 datasheet](https://www.airsupplylab.com/images/Learn/Embedded/Datasheets/DHT22_Temperature_and_Humidity_Sensor.pdf): bare four-pin package |
+| Servo | [TowerPro SG90](https://towerpro.com.tw/product/sg90-analog/) |
+| Stepper and driver | [28BYJ-48](https://download.mikroe.com/documents/datasheets/step-motor-5v-28byj48-datasheet.pdf), [ULN2003A DIP-16](https://www.ti.com/lit/ds/symlink/uln2003a.pdf) |
+| DC motor switching circuit | [AO3400A SOT-23](https://www.aosmd.com/res/data_sheets/AO3400A.pdf) on a generic breakout; [axial diode and cathode band](https://www.vishay.com/docs/88503/1n4001.pdf) |
+| Analog inputs | [Three-terminal potentiometer](https://www.bourns.com/docs/product-datasheets/PTV09.pdf), [two-terminal FSR](https://www.interlinkelectronics.com/downloads/datasheets/fsr-400-series-datasheet.pdf), [capacitive soil probe](https://wiki.dfrobot.com/sen0193/) |
+| OLED | Generic four-pin I2C module using an [SSD1306 controller](https://cdn-shop.adafruit.com/datasheets/SSD1306.pdf); breakout pin order varies, so use its printed labels |
+| Breadboard | [400-point half-size layout](https://www.adafruit.com/product/64): 300 terminal holes and 100 power-rail holes |
+
 ## License
 
 Original application code, lesson content and artwork are available under the [MIT License](LICENSE).
