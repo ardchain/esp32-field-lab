@@ -1,0 +1,24 @@
+{
+  "name": "esp32-field-lab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 4173 -d dist",
+    "check": "node --check dist/app.js && node --check dist/scene.js && node --check dist/lessons.js && node --check dist/guides.js && node --check dist/diagrams.js",
+    "test": "node tests/viewport.cjs && node tests/browser.cjs && node tests/guides.cjs"
+  },
+  "description": "An interactive 3D ESP32 classroom with 16 lessons and guided circuit explanations.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ardchain/esp32-field-lab.git"
+  },
+  "homepage": "https://ardchain.github.io/esp32-field-lab/",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}

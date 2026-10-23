@@ -1,0 +1,83 @@
+/* Guided lessons reserve space below the 3D scene rather than covering it. */
+.visual-guide-launch{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:40px;padding:9px 12px;border:1px solid #8aa2b0;background:transparent;color:var(--ink,#264864);font:11px/1.5 'JetBrains Mono',monospace;text-align:left;cursor:pointer}.visual-guide-launch>svg{width:16px;height:16px;flex-shrink:0}.visual-guide-launch:hover,.visual-guide-launch:focus-visible{background:#eee9dd;color:#9c694c;border-color:#b18161}.visual-guide-launch[aria-expanded=true]{border-color:#b47a56;color:#a56846}.pinout-focus{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:44px;padding:10px 0;border:0;background:none;color:#40677f;text-align:left;font:11px/1.6 'JetBrains Mono',monospace;cursor:pointer}.pinout-focus>svg{width:16px;height:16px;flex-shrink:0;color:#9a7257}.pinout-focus>span:last-child{flex-shrink:0;color:#9a7257}.pinout-focus:hover,.pinout-focus:focus-visible{color:#a56d4a}.pinout-table tr.is-focused{background:#e9e4d8;box-shadow:inset 2px 0 0 #b77c58}.pinout-table tr.is-focused td{border-bottom-color:#c3a086}.pinout-table tr.is-focused td:first-child{padding-left:9px}.pinout-table tr.is-focused .pinout-focus{color:#9b6545}.pinout-table td:has(>.pinout-focus){padding-block:0}.scene-panel.guide-open #scene{bottom:calc(48px + var(--guide-panel-height,170px))}#visual-guide{position:absolute;left:8px;right:8px;bottom:64px;z-index:5;padding:8px 0 10px;border-top:1px solid #829aaa80;border-bottom:1px solid #829aaa50;background:var(--paper,#f8f5eb);color:var(--ink,#264864);display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:20px;align-items:start;max-height:310px;overflow:auto;scrollbar-width:thin;scrollbar-color:#8aa0ae #dce3e440;overscroll-behavior:contain}#visual-guide[hidden]{display:none!important}.guide-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;grid-column:1/-1;min-height:36px;margin-bottom:2px}#guide-position{font:10px/1.6 'JetBrains Mono',monospace;color:#7c94a3}#close-guide{display:flex;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;padding:10px;color:#688599;margin:-4px 0 -4px auto;cursor:pointer}#close-guide svg{width:16px;height:16px}#close-guide:hover{color:#a56d4a;background:#eee9dd}#guide-title{grid-column:1;font:500 19px/1.3 'Space Grotesk',sans-serif;letter-spacing:-.35px;margin:0 0 7px;color:#345a73}#guide-text{grid-column:1;font:13px/1.65 'DM Sans',sans-serif;color:#526f82;margin:0;max-width:68ch;overflow-wrap:anywhere}#guide-text code{font:11px/1.6 'JetBrains Mono',monospace;color:#a36c4b}.guide-controls{grid-column:2;grid-row:2/4;display:flex;align-self:end;align-items:center;gap:8px;min-width:0}.guide-controls button{display:flex;align-items:center;justify-content:center;gap:7px;min-height:44px;min-width:44px;padding:10px 13px;border:1px solid #8aa2b080;background:transparent;font:11px/1.5 'JetBrains Mono',monospace;color:#3f657d;white-space:nowrap;cursor:pointer}.guide-controls button>svg{width:15px;height:15px;flex-shrink:0}.guide-controls button:hover:not(:disabled){background:#eee9dd;color:#a56d4a;border-color:#b18161}.guide-controls button:disabled{opacity:.35;cursor:default}#guide-next{border-color:#b5805f;background:#f1e8db;color:#9e6745}.guide-context-note{font:12px/1.7 'DM Sans',sans-serif;color:#748a98;margin:11px 0}.glossary-term{display:inline;padding:0;border:0;border-bottom:1px dotted #718fa1;color:#355e79;background:none;font:inherit;line-height:inherit;cursor:help;text-underline-offset:3px}.glossary-term:hover,.glossary-term:focus-visible{color:#a66f4e;border-bottom-color:#a66f4e}.glossary-term[aria-expanded=true]{color:#a66f4e;border-bottom-style:solid}.term-explanation{margin:10px 0 14px;padding:10px 0 10px 12px;border-left:2px solid #af83636b;color:#617c8e;background:none;font:12px/1.7 'DM Sans',sans-serif}.term-explanation strong{font-weight:600;color:#355e79}.scene-panel.expanded.guide-open #scene{bottom:calc(65px + var(--guide-panel-height,170px))}.scene-panel.expanded #visual-guide{left:24px;right:24px;bottom:75px;max-height:min(35vh,310px)}
+@media(max-width:1180px){#visual-guide{column-gap:12px}#guide-title{font-size:18px}#guide-text{font-size:13px}.guide-controls{gap:5px}.guide-controls button{padding:10px;min-width:44px;font-size:10px}}
+@media(max-width:960px) and (min-width:761px){#visual-guide{display:block;max-height:300px}.guide-heading{margin-bottom:1px}.guide-controls{justify-content:flex-end;margin-top:10px;gap:7px}.guide-controls button{font-size:11px;padding-inline:12px}#guide-title{font-size:18px}}
+@media(max-width:760px){.visual-guide-launch{min-height:44px;font-size:11px;padding:10px 12px}.pinout-focus{font-size:11px;min-height:46px}.scene-panel.guide-open{height:calc(385px + var(--guide-panel-height,210px))}.scene-panel.guide-open #scene{bottom:calc(48px + var(--guide-panel-height,210px))}#visual-guide{left:3px;right:3px;bottom:64px;display:block;padding:6px 0 9px;max-height:min(42dvh,330px)}.guide-heading{min-height:36px;margin-bottom:2px}#guide-position{font-size:10px}#guide-title{font-size:19px;margin:0 0 7px}#guide-text{font-size:13px;line-height:1.65;max-width:none}.guide-controls{display:flex;justify-content:space-between;gap:12px;margin-top:12px}.guide-controls button{font-size:11px;padding:10px 14px;min-height:44px;min-width:44px}#guide-next{margin-left:auto}#close-guide{width:44px;height:44px;min-width:44px}.guide-context-note,.term-explanation{font-size:12px}.scene-panel.expanded.guide-open{height:auto;max-height:none}.scene-panel.expanded.guide-open #scene{bottom:calc(69px + var(--guide-panel-height,210px))}.scene-panel.expanded #visual-guide{left:14px;right:14px;bottom:75px;max-height:min(40dvh,310px)}}
+@media(max-width:380px){.scene-panel.guide-open{height:calc(365px + var(--guide-panel-height,210px))}.scene-panel.expanded.guide-open{height:auto}#guide-title{font-size:18px}#guide-text{font-size:13px}.guide-controls button{padding-inline:11px}.guide-context-note{font-size:12px}}
+
+.guide-copy{grid-column:1;min-width:0}.guide-controls{grid-row:2}.lesson-learning>.visual-guide-launch{margin-bottom:20px}.scene-panel{scroll-margin-top:12px}
+
+.circuit-scroll{max-width:100%;overflow-x:auto;scrollbar-width:thin;scrollbar-color:#8aa0ae #eee9dd}.diagram-scroll-hint{display:none}.schematic-panel>.visual-guide-launch{margin-top:18px}.circuit-diagram+.visual-guide-launch{margin-top:18px}.guide-open{overflow-anchor:none}
+@media(max-width:760px){.circuit-scroll .circuit-svg{min-width:580px}.diagram-scroll-hint{display:block;margin-top:8px;color:#687f8e;font:10px/1.5 'JetBrains Mono',monospace}.scene-panel:has(#schematic:not([hidden])){height:640px}.scene-panel.expanded:has(#schematic:not([hidden])){height:auto}.schematic-panel{padding:14px}}
+@media(min-width:761px){.schematic-panel .circuit-svg{max-height:360px;margin-inline:auto}.schematic-panel .circuit-diagram figcaption{max-width:70ch;margin-inline:auto}.schematic-panel>.visual-guide-launch{margin-top:14px}}
+
+/* The desktop viewport owns the scene height. A guide spends only the space
+   left after the canvas, its top controls and the bottom toolbar. */
+@media (min-width:761px) {
+  .scene-panel.guide-open:not(.expanded) { height:100%; min-height:0; }
+  .scene-panel.guide-open #scene {
+    top:40px;
+    bottom:calc(48px + var(--guide-panel-height,150px));
+  }
+  #visual-guide {
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    grid-template-rows:44px minmax(0,1fr);
+    column-gap:14px;
+    row-gap:6px;
+    left:8px;
+    right:8px;
+    bottom:64px;
+    min-height:96px;
+    max-height:clamp(96px,calc(100% - 284px),240px);
+    padding:4px 0 6px;
+    overflow:hidden;
+  }
+  .guide-heading {
+    grid-column:1;
+    grid-row:1;
+    min-width:0;
+    min-height:44px;
+    margin:0;
+    gap:4px;
+  }
+  #close-guide { width:44px; height:44px; min-width:44px; margin:0; }
+  .guide-controls {
+    grid-column:2;
+    grid-row:1;
+    align-self:center;
+    margin:0;
+    gap:6px;
+  }
+  .guide-controls button { min-height:44px; padding:9px 12px; }
+  .guide-copy {
+    grid-column:1/-1;
+    grid-row:2;
+    min-width:0;
+    min-height:0;
+    overflow:auto;
+    overscroll-behavior:contain;
+    padding:0 10px 2px 0;
+    scrollbar-width:thin;
+    scrollbar-color:#8aa0ae #dce3e440;
+  }
+  #guide-title { margin-bottom:6px; }
+  #guide-text { max-width:none; }
+  .scene-panel.expanded.guide-open { height:auto; }
+  .scene-panel.expanded.guide-open #scene {
+    bottom:calc(65px + var(--guide-panel-height,150px));
+  }
+  .scene-panel.expanded #visual-guide {
+    left:24px;
+    right:24px;
+    bottom:75px;
+    max-height:clamp(96px,calc(100% - 310px),260px);
+  }
+}
+
+@media (min-width:761px) and (max-width:1100px) {
+  #visual-guide { column-gap:5px; }
+  #guide-position { font-size:9px; }
+  .guide-controls { gap:5px; }
+  .guide-controls button { font-size:10px; padding-inline:9px; }
+}
