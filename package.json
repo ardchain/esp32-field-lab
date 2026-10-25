@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "python3 -m http.server 4173 -d dist",
-    "check": "node --check dist/app.js && node --check dist/scene.js && node --check dist/lessons.js && node --check dist/guides.js && node --check dist/diagrams.js && node --check dist/build.js && node --check dist/build-circuit.js",
+    "check": "node --check dist/app.js && node --check dist/scene.js && node --check dist/lessons.js && node --check dist/guides.js && node --check dist/diagrams.js && node --check dist/build.js && node --check dist/build-circuit.js && node --check dist/build-projects.js",
     "test:circuit": "node tests/build-circuit.cjs",
     "test:build": "npm run test:circuit && node tests/build-browser.cjs",
     "test": "npm run test:circuit && node tests/viewport.cjs && node tests/browser.cjs && node tests/guides.cjs && node tests/build-browser.cjs"

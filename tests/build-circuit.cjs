@@ -2,6 +2,7 @@ const assert=require('node:assert/strict');
 
 (async()=>{
   const M=await import('../dist/build-circuit.js');
+  const P=await import('../dist/build-projects.js');
   let passed=0;
   function test(name,fn){fn();passed++;console.log('PASS '+name);}
   const wire=(id,from,to,color='#d4ac58')=>({id,from,to,color});
@@ -9,6 +10,13 @@ const assert=require('node:assert/strict');
   const setup=(led={a:'bb:e9',b:'bb:e10'},resistor={a:'bb:c6',b:'bb:c9',ohms:330})=>
     ({...M.initialState(),parts:{led,resistor}});
   const valid=()=>({...setup(),wires:[wire('signal','pin:23','bb:a6'),wire('ground','bb:a10','pin:GND')]});
+  const projectSetup=id=>({...M.initialState(id),parts:clone(P.getBuildProject(id).placements)});
+  const validProject=id=>{
+    const s=projectSetup(id);s.wires=valid().wires;
+    if(id==='button')s.wires.push(wire('input','pin:18','bb:a16'),wire('return','bb:j16','pin:GND2'));
+    if(id==='potentiometer')s.wires.push(wire('low','pin:GND2','bb:f18'),wire('wiper','pin:34','bb:f19'),wire('high','pin:3V3','bb:f20'));
+    return s;
+  };
   const verdict=(state,code)=>{const result=M.validateCircuit(state);assert.equal(result.code,code,JSON.stringify(result));assert.equal(result.ok,code==='complete');return result;};
 
   test('all 430 physical contacts are unique and parsable',()=>{
@@ -185,6 +193,143 @@ const assert=require('node:assert/strict');
     for(const t of [500,999,1500,-1,Infinity])assert.equal(M.ledIsOn(s,t),false);
     s.interval=250;assert.equal(M.ledIsOn(s,249),true);assert.equal(M.ledIsOn(s,250),false);
     s.wires=[];assert.equal(M.ledIsOn(s,0),false);
+  });
+  test('three projects expose distinct parts, sketches and controls',()=>{
+    assert.deepEqual(P.BUILD_PROJECTS.map(p=>p.id),['blink','button','potentiometer']);
+    for(const project of P.BUILD_PROJECTS){
+      assert.deepEqual(Object.keys(M.initialState(project.id).parts),project.parts);
+      for(const kind of project.parts)assert.equal(M.placementIssue(M.initialState(project.id),kind,project.placements[kind]),null);
+      assert.equal(typeof project.code,'string');assert.ok(project.code.length>100);
+    }
+    assert.match(P.buildSketch({...valid(),interval:250}),/INTERVAL_MS = 250;/);
+    assert.match(P.getBuildProject('button').code,/INPUT_PULLUP/);
+    assert.match(P.getBuildProject('potentiometer').code,/analogRead/);
+    assert.equal(P.getBuildProject('unknown').id,'blink');
+  });
+  test('legacy Blink drafts remain valid and new project drafts restore independently',()=>{
+    const old=valid();delete old.project;verdict(old,'complete');assert.equal(M.normalizeState(old).project,'blink');
+    for(const id of ['button','potentiometer']){
+      const s=validProject(id);assert.deepEqual(M.normalizeState(s),s);verdict(s,'complete');
+      const missing=M.initialState(id);verdict(missing,'missing_parts');
+    }
+    verdict({...valid(),project:'made-up'},'invalid_project');
+    assert.equal(M.normalizeState({...valid(),project:'made-up'}).project,'blink');
+    const extra=valid();extra.parts.button=P.getBuildProject('button').placements.button;verdict(extra,'unexpected_part');
+  });
+  test('button and potentiometer footprints rotate, stay finite and expose semantic terminals',()=>{
+    const button=M.placement('button','bb:d16');
+    assert.deepEqual(button,{a:'bb:d16',b:'bb:d18',c:'bb:f16',d:'bb:f18'});
+    assert.deepEqual(M.partTerminals('button',button),['bb:d16','bb:d18','bb:f16','bb:f18']);
+    assert.deepEqual(M.placement('button','bb:d16',90),{a:'bb:d16',b:'bb:f16',c:'bb:d14',d:'bb:f14'});
+    assert.deepEqual(M.placement('potentiometer','bb:h18'),{a:'bb:h18',w:'bb:h19',b:'bb:h20'});
+    assert.deepEqual(M.partTerminals('potentiometer',M.placement('potentiometer','bb:h18')),['bb:h18','bb:h19','bb:h20']);
+    for(const args of [['button','bb:i1'],['button','bb:a29'],['potentiometer','bb:h29'],['potentiometer','bb:i1',90]])assert.equal(M.placement(...args),null);
+    const s=M.initialState('potentiometer');assert.equal(M.placementIssue(s,'potentiometer',{a:'bb:h18',w:'bb:h20',b:'bb:h21'}).code,'invalid_placement');
+    assert.equal(M.placementIssue(M.initialState('button'),'button',{...button,d:'bb:g18'}).code,'invalid_placement');
+  });
+  test('all component legs reserve physical holes and restore rejects collisions',()=>{
+    const s=projectSetup('button');
+    for(const endpoint of M.partTerminals('button',s.parts.button))assert.equal(M.wireIssue(s,'pin:18',endpoint).code,'occupied_contact');
+    assert.equal(M.placementIssue(s,'led',{a:'bb:f18',b:'bb:f19'}).code,'occupied_contact');
+    const pot=projectSetup('potentiometer');assert.equal(M.wireIssue(pot,'pin:34','bb:h19').code,'occupied_contact');
+    pot.parts.potentiometer={a:'bb:e8',w:'bb:e9',b:'bb:e10'};assert.equal(M.normalizeState(pot).parts.potentiometer,null);
+  });
+  test('button uses permanent same-side pairs and either pair can be the input',()=>{
+    const s=validProject('button');verdict(s,'complete');
+    s.wires.find(w=>w.id==='input').to='bb:a18';s.wires.find(w=>w.id==='return').from='bb:j18';verdict(s,'complete');
+    s.wires.find(w=>w.id==='input').to='bb:j18';s.wires.find(w=>w.id==='return').from='bb:a18';verdict(s,'complete');
+  });
+  test('button supports shifted and rotated layouts without memorized positions',()=>{
+    for(let row=12;row<=28;row++){
+      const s=validProject('button');s.parts.button=M.placement('button',`bb:e${row}`);
+      s.wires.find(w=>w.id==='input').to=`bb:a${row}`;s.wires.find(w=>w.id==='return').from=`bb:j${row+2}`;verdict(s,'complete');
+    }
+    const s=validProject('button');s.parts.button=M.placement('button','bb:d16',90);
+    s.wires.find(w=>w.id==='input').to='bb:a16';s.wires.find(w=>w.id==='return').from='bb:j14';verdict(s,'complete');
+  });
+  test('released button cannot have its sides bridged by strips or a jumper',()=>{
+    const s=validProject('button');s.wires.push(wire('bridge','bb:b18','bb:i18'));verdict(s,'button_shorted');
+    const same=validProject('button');same.parts.button=M.placement('button','bb:a16');same.wires.find(w=>w.id==='input').to='bb:b16';verdict(same,'button_shorted');
+    const wrongPair=validProject('button');wrongPair.wires.find(w=>w.id==='return').from='bb:b18';verdict(wrongPair,'input_grounded');
+  });
+  test('button requires both GPIO18 and ground, including input and output isolation',()=>{
+    const s=validProject('button');s.wires=s.wires.filter(w=>w.id!=='return');verdict(s,'button_input');
+    const wrong=validProject('button');wrong.wires.find(w=>w.id==='input').from='pin:19';verdict(wrong,'button_input');
+    const joined=validProject('button');joined.wires.push(wire('join','bb:b16','bb:b9'));verdict(joined,'input_output_join');
+    const branch=validProject('button');branch.wires.push(wire('branch','pin:1','bb:b18'));verdict(branch,'extra_input_gpio');
+  });
+  test('button rejects a supply on either switch side before a press can short it',()=>{
+    for(const pin of ['pin:3V3','pin:VIN']){
+      const s=validProject('button');s.wires=s.wires.filter(w=>w.id!=='input');s.wires.push(wire('danger',pin,'bb:a16'));verdict(s,'button_power');
+    }
+    const output=validProject('button');output.wires=output.wires.filter(w=>w.id!=='input');output.wires.push(wire('danger','bb:b6','bb:a16'));verdict(output,'button_power');
+    const powerOnGround=validProject('button');powerOnGround.wires.push(wire('danger','pin:3V3','bb:i18'));verdict(powerOnGround,'short_power');
+  });
+  test('button simulation reflects the internal pull-up and stops on invalid builds',()=>{
+    const s=validProject('button'),released=M.simulationState(s,{pressed:false}),pressed=M.simulationState(s,{pressed:true});
+    assert.equal(released.valid,true);assert.equal(released.inputLevel,'HIGH');assert.equal(released.ledBrightness,0);
+    assert.equal(pressed.inputLevel,'LOW');assert.equal(pressed.ledBrightness,1);
+    s.wires.pop();assert.equal(M.simulationState(s,{pressed:true}).valid,false);assert.equal(M.simulationState(s,{pressed:true}).ledBrightness,0);
+  });
+  test('potentiometer outer terminals may be swapped and the dial direction follows',()=>{
+    const s=validProject('potentiometer');assert.equal(verdict(s,'complete').potReversed,false);
+    for(const [value,adc,duty] of [[0,0,0],[50,2048,127],[100,4095,255]]){
+      const sim=M.simulationState(s,{value});assert.equal(sim.adc,adc);assert.equal(sim.duty,duty);assert.equal(sim.ledBrightness,duty/255);
+    }
+    [s.wires[2].to,s.wires[4].to]=[s.wires[4].to,s.wires[2].to];assert.equal(verdict(s,'complete').potReversed,true);
+    assert.equal(M.simulationState(s,{value:0}).adc,4095);assert.equal(M.simulationState(s,{value:100}).adc,0);
+    assert.equal(M.simulationState(s,{value:-50}).adc,4095);assert.equal(M.simulationState(s,{value:Infinity}).value,50);
+  });
+  test('potentiometer can move to either breadboard half and use either orientation',()=>{
+    for(const [part,holes] of [
+      [{a:'bb:c21',w:'bb:c22',b:'bb:c23'},['bb:a21','bb:a22','bb:a23']],
+      [{a:'bb:j27',w:'bb:j26',b:'bb:j25'},['bb:f27','bb:f26','bb:f25']],
+    ]){
+      const s=validProject('potentiometer');s.parts.potentiometer=part;
+      for(let i=0;i<3;i++)s.wires[i+2].to=holes[i];verdict(s,'complete');
+    }
+  });
+  test('potentiometer works with separate continuous power rails and arbitrary wire colors',()=>{
+    const s=validProject('potentiometer');s.wires=s.wires.slice(0,2);
+    s.wires.push(wire('gnd','pin:GND2','rail:L-:1'),wire('low','rail:L-:25','bb:f18'),
+      wire('vcc','pin:3V3','rail:R+:25'),wire('high','rail:R+:1','bb:f20'),wire('w','pin:34','bb:f19'));
+    s.wires=s.wires.map(w=>({...w,color:'#abcdef'}));verdict(s,'complete');
+  });
+  test('potentiometer rejects same-strip legs, outer shorts and a shorted wiper',()=>{
+    const horizontal=validProject('potentiometer');horizontal.parts.potentiometer=M.placement('potentiometer','bb:g23',90);verdict(horizontal,'pot_shorted');
+    const outers=validProject('potentiometer');outers.wires=outers.wires.filter(w=>w.id!=='high');outers.wires.push(wire('same','bb:g18','bb:g20'));verdict(outers,'pot_shorted');
+    for(const outer of ['bb:g18','bb:g20']){const s=validProject('potentiometer');s.wires.push(wire('short','bb:g19',outer));verdict(s,'pot_shorted');}
+    const isolatedWiper=validProject('potentiometer');isolatedWiper.wires.find(w=>w.id==='wiper').to='bb:a24';
+    isolatedWiper.wires.push(wire('tie','bb:b24','bb:g20'));verdict(isolatedWiper,'wiper_shorted');
+  });
+  test('potentiometer requires GPIO34 on the wiper and both outer power connections',()=>{
+    const unpowered=validProject('potentiometer');unpowered.wires=unpowered.wires.filter(w=>w.id!=='high');verdict(unpowered,'pot_power');
+    const wrong=validProject('potentiometer');wrong.wires.find(w=>w.id==='wiper').from='pin:35';verdict(wrong,'wiper_input');
+    const joined=validProject('potentiometer');joined.wires.push(wire('join','bb:g19','bb:b9'));verdict(joined,'input_output_join');
+    const extra=validProject('potentiometer');extra.wires.push(wire('extra','pin:35','bb:g19'));verdict(extra,'extra_input_gpio');
+    const vin=validProject('potentiometer');vin.wires.find(w=>w.id==='high').from='pin:VIN';verdict(vin,'pot_voltage');
+  });
+  test('new project simulations never mutate source state and never run disconnected inputs',()=>{
+    for(const id of ['button','potentiometer']){
+      const s=validProject(id),before=JSON.stringify(s);M.simulationState(s,{pressed:true,value:71});assert.equal(JSON.stringify(s),before);
+      s.wires=[];const sim=M.simulationState(s,{pressed:true,value:100});assert.equal(sim.valid,false);assert.equal(sim.ledBrightness,0);
+    }
+  });
+  test('connection plans solve all three project nets using free contacts without moving parts',()=>{
+    for(const id of ['blink','button','potentiometer']){
+      const s=projectSetup(id),before=JSON.stringify(s),plan=M.connectionPlan(s);assert.ok(Array.isArray(plan));assert.ok(plan.length>0);assert.equal(JSON.stringify(s),before);
+      for(const [i,edge] of plan.entries()){
+        assert.equal(M.wireIssue(s,edge.from,edge.to),null);s.wires.push(wire('planned-'+i,edge.from,edge.to));
+      }
+      verdict(s,'complete');assert.deepEqual(M.connectionPlan(s),[]);
+    }
+  });
+  test('connection plans handle partial alternative wiring and refuse existing faults',()=>{
+    const s=validProject('potentiometer');[s.wires[2].to,s.wires[4].to]=[s.wires[4].to,s.wires[2].to];s.wires.splice(3,1);
+    const plan=M.connectionPlan(s);assert.equal(plan.length,1);s.wires.push(wire('hint',plan[0].from,plan[0].to));verdict(s,'complete');
+    const button=validProject('button');button.wires.push(wire('bridge','bb:b18','bb:i18'));assert.equal(M.connectionPlan(button),null);
+    assert.equal(M.connectionPlan(M.initialState('button')),null);
+    const reversed=valid();[reversed.parts.led.a,reversed.parts.led.b]=[reversed.parts.led.b,reversed.parts.led.a];assert.equal(M.connectionPlan(reversed),null);
   });
   console.log(JSON.stringify({result:'passed',tests:passed}));
 })().catch(error=>{console.error(error);process.exitCode=1;});

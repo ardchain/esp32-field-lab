@@ -1,5 +1,5 @@
-// Electrical rules for the guided Blink build. This is a connectivity checker,
-// not a general circuit solver: only the supplied LED and resistor are modeled.
+// Connectivity rules for the supplied teaching projects, not a general solver.
+import { BUILD_PROJECTS, getBuildProject } from './build-projects.js';
 export const COLUMNS = 'abcdefghij';
 export const ROW_COUNT = 30;
 export const MAX_WIRES = 60;
@@ -18,9 +18,15 @@ const isObject = value => value !== null && typeof value === 'object' && !Array.
 const diagnostic = (code, title, message, targets = [], extra = {}) =>
   ({ok:false, code, title, message, targets:[...new Set(targets.filter(Boolean))], ...extra});
 
-export function initialState() {
-  return {version:1, parts:{led:null, resistor:null}, wires:[], interval:500};
+export function initialState(project='blink') {
+  project=getBuildProject(project).id;
+  return {version:1, project, parts:Object.fromEntries(getBuildProject(project).parts.map(kind=>[kind,null])), wires:[], interval:500};
 }
+export function partTerminals(kind,part){
+  if(!part)return[];
+  return (kind==='button'?['a','b','c','d']:kind==='potentiometer'?['a','w','b']:['a','b']).map(key=>part[key]);
+}
+const projectOf=state=>getBuildProject(state?.project);
 
 export function parseEndpoint(value) {
   if (typeof value !== 'string' || value.length > 40) return null;
@@ -60,21 +66,45 @@ export const allEndpoints = () => [...endpoints];
 // Orientation 0 points toward higher row numbers; 90 toward higher columns.
 // LED a is its anode (long lead); b is its cathode (short lead).
 export function placement(kind, anchor, orientation=0, flipped=false) {
-  const first=parseEndpoint(anchor), span=kind==='led'?1:kind==='resistor'?3:0;
-  if (!span || first?.kind!=='hole' || ![0,90,180,270].includes(orientation)) return null;
-  let column=COLUMNS.indexOf(first.column), row=first.row;
-  if (orientation===0) row+=span;
-  if (orientation===90) column+=span;
-  if (orientation===180) row-=span;
-  if (orientation===270) column-=span;
-  if (column<0 || column>9 || row<1 || row>ROW_COUNT) return null;
-  let a=first.id, b=`bb:${COLUMNS[column]}${row}`;
+  const first=parseEndpoint(anchor);
+  if (!['led','resistor','button','potentiometer'].includes(kind) || first?.kind!=='hole' || ![0,90,180,270].includes(orientation)) return null;
+  const point=(dr,dc)=>{
+    for(let angle=0;angle<orientation;angle+=90)[dr,dc]=[-dc,dr];
+    const col=COLUMNS.indexOf(first.column)+dc,row=first.row+dr;
+    return col<0||col>9||row<1||row>ROW_COUNT?null:`bb:${COLUMNS[col]}${row}`;
+  };
+  if(kind==='button'){
+    const part={a:point(0,0),b:point(2,0),c:point(0,2),d:point(2,2)};
+    return Object.values(part).every(Boolean)?part:null;
+  }
+  if(kind==='potentiometer'){
+    const part={a:point(0,0),w:point(1,0),b:point(2,0)};
+    return Object.values(part).every(Boolean)?part:null;
+  }
+  let a=first.id, b=point(kind==='led'?1:3,0);
+  if(!b)return null;
   if (kind==='led' && flipped) [a,b]=[b,a];
   return kind==='resistor'?{a,b,ohms:330}:{a,b};
 }
 
 function cleanPart(kind, value) {
   if (!isObject(value)) return null;
+  if(kind==='button'||kind==='potentiometer'){
+    const keys=kind==='button'?['a','b','c','d']:['a','w','b'];
+    const points=keys.map(key=>parseEndpoint(value[key]));
+    if(points.some(p=>p?.kind!=='hole'))return null;
+    const vector=(p,q)=>[q.row-p.row,COLUMNS.indexOf(q.column)-COLUMNS.indexOf(p.column)];
+    const eq=(a,b)=>a[0]===b[0]&&a[1]===b[1];
+    if(kind==='potentiometer'){
+      const d=vector(points[0],points[1]);
+      if(Math.abs(d[0])+Math.abs(d[1])!==1||!eq(d,vector(points[1],points[2])))return null;
+    }else{
+      const u=vector(points[0],points[1]),v=vector(points[0],points[2]);
+      if(Math.abs(u[0])+Math.abs(u[1])!==2||Math.abs(v[0])+Math.abs(v[1])!==2||u[0]*v[0]+u[1]*v[1]!==0||
+        (u[0]&&u[1])||(v[0]&&v[1])||!eq(vector(points[0],points[3]),[u[0]+v[0],u[1]+v[1]]))return null;
+    }
+    return Object.fromEntries(keys.map((key,i)=>[key,points[i].id]));
+  }
   const a=parseEndpoint(value.a), b=parseEndpoint(value.b), span=kind==='led'?1:3;
   if (a?.kind!=='hole' || b?.kind!=='hole') return null;
   const dr=Math.abs(a.row-b.row), dc=Math.abs(COLUMNS.indexOf(a.column)-COLUMNS.indexOf(b.column));
@@ -89,13 +119,13 @@ function cleanPart(kind, value) {
 
 function occupiedEndpoints(state, omitPart=null) {
   const occupied=new Map();
-  for (const kind of ['led','resistor']) {
+  for (const kind of projectOf(state).parts) {
     if (kind===omitPart) continue;
     const part=state.parts?.[kind];
     if (!part) continue;
-    for (const key of ['a','b']) {
-      const id=canonicalEndpoint(part[key]);
-      if (id) occupied.set(id,kind==='led'?'the LED':'the resistor');
+    for (const terminal of partTerminals(kind,part)) {
+      const id=canonicalEndpoint(terminal);
+      if (id) occupied.set(id,`the ${projectOf(state).labels[kind].toLowerCase()}`);
     }
   }
   for (const wire of state.wires||[]) for (const key of ['from','to']) {
@@ -106,11 +136,11 @@ function occupiedEndpoints(state, omitPart=null) {
 }
 
 export function placementIssue(state, kind, candidate) {
-  if (!['led','resistor'].includes(kind) || !cleanPart(kind,candidate))
+  if (!projectOf(state).parts.includes(kind) || !cleanPart(kind,candidate))
     return diagnostic('invalid_placement','Choose a position on the breadboard',
-      kind==='led'?'The LED needs two adjacent holes in one row or column.':'The resistor leads must be three hole spacings apart in one row or column.');
+      kind==='led'?'The LED needs two adjacent holes in one row or column.':kind==='button'?'The button needs four holes at the corners of its two-by-two-spacing footprint.':kind==='potentiometer'?'The potentiometer needs three consecutive holes.':'The resistor leads must be three hole spacings apart in one row or column.');
   const part=cleanPart(kind,candidate), occupied=occupiedEndpoints(state,kind);
-  for (const id of [part.a,part.b]) if (occupied.has(id))
+  for (const id of partTerminals(kind,part)) if (occupied.has(id))
     return diagnostic('occupied_contact','That contact is occupied',
       `${endpointLabel(id)} already holds ${occupied.get(id)}. Use a free hole.`,[id]);
   return null;
@@ -121,7 +151,7 @@ export function wireIssue(state, from, to) {
   if (!a || !b) return diagnostic('invalid_endpoint','Choose two contacts','Select board pins, breadboard holes or rail contacts.');
   if (a===b) return diagnostic('same_endpoint','Choose a different contact','A wire needs two different endpoints.',[a]);
   if ((state.wires?.length||0)>=MAX_WIRES)
-    return diagnostic('wire_limit','Remove an unused wire','This Blink workspace supports up to 60 wires.');
+    return diagnostic('wire_limit','Remove an unused wire','This build workspace supports up to 60 wires.');
   if ((state.wires||[]).some(w=>(canonicalEndpoint(w.from)===a&&canonicalEndpoint(w.to)===b)||(canonicalEndpoint(w.from)===b&&canonicalEndpoint(w.to)===a)))
     return diagnostic('duplicate_wire','That wire is already connected','Choose another pair of contacts.',[a,b]);
   const occupied=occupiedEndpoints(state);
@@ -134,11 +164,11 @@ export function wireIssue(state, from, to) {
 // Restoring storage never trusts arbitrary object keys, HTML, colors or IDs.
 // Invalid parts/wires are discarded; validation below never silently repairs its input.
 export function normalizeState(raw) {
-  const state=initialState();
+  const state=initialState(raw?.project);
   if (!isObject(raw) || raw.version!==1) return state;
   if (typeof raw.interval==='number' && Number.isFinite(raw.interval))
     state.interval=Math.max(100,Math.min(1500,100+Math.round((raw.interval-100)/50)*50));
-  for (const kind of ['led','resistor']) {
+  for (const kind of projectOf(state).parts) {
     const part=cleanPart(kind,raw.parts?.[kind]);
     if (part && !placementIssue(state,kind,part)) state.parts[kind]=part;
   }
@@ -169,8 +199,11 @@ function validInput(raw) {
     return diagnostic('invalid_state','Reset this build','The saved build is not in a supported format.');
   if (!Number.isFinite(raw.interval)||raw.interval<100||raw.interval>1500||(raw.interval-100)%50!==0)
     return diagnostic('invalid_interval','Choose a blink interval','Use 100–1500 ms, in steps of 50 ms.');
-  const probe=initialState();
-  for (const kind of ['led','resistor']) {
+  if(raw.project!==undefined&&!BUILD_PROJECTS.some(p=>p.id===raw.project))return diagnostic('invalid_project','Choose a build project','This project is not supported.');
+  const probe=initialState(raw.project);
+  for(const kind of Object.keys(raw.parts))if(!projectOf(raw).parts.includes(kind)&&raw.parts[kind]!==null)
+    return diagnostic('unexpected_part','Remove the extra component','This component is not part of the selected build.');
+  for (const kind of projectOf(raw).parts) {
     if (raw.parts[kind]===null) continue;
     const error=placementIssue(probe,kind,raw.parts[kind]);
     if (error) return error;
@@ -190,9 +223,7 @@ function validInput(raw) {
 
 export function validateCircuit(raw) {
   const bad=validInput(raw);if(bad)return bad;
-  const {parts,wires}=raw, uf=new UnionFind();
-  for (const id of endpoints) uf.join(id,netOf(id));
-  for (const wire of wires) uf.join(canonicalEndpoint(wire.from),canonicalEndpoint(wire.to));
+  const {parts,wires}=raw, project=projectOf(raw), uf=buildNets(raw);
   const root=id=>uf.find(canonicalEndpoint(id)), ground=root('pin:GND'), source=root('pin:23');
   const supply=root('pin:3V3'), vin=root('pin:VIN');
   if (source===ground) return diagnostic('short_gpio','GPIO23 is shorted to GND',
@@ -206,13 +237,13 @@ export function validateCircuit(raw) {
   if (vinInput) return diagnostic('gpio_overvoltage','Keep VIN off the GPIO pins',
     'VIN can carry 5 V from USB. ESP32 GPIO and EN use 3.3 V logic and are not 5 V tolerant.', ['pin:VIN',vinInput]);
   if (root('pin:EN')===ground) return diagnostic('held_in_reset','EN is holding the board in reset',
-    'Disconnect EN from GND so the Blink sketch can run.', ['pin:EN','pin:GND']);
+    'Disconnect EN from GND so the sketch can run.', ['pin:EN','pin:GND']);
   if (root('pin:12')===supply) return diagnostic('boot_strap','Keep GPIO12 off 3V3 at startup',
     'On this original ESP32-WROOM board, GPIO12 HIGH at reset selects the wrong flash supply voltage and can prevent boot. Remove this connection.', ['pin:12','pin:3V3']);
-  if (!parts.led||!parts.resistor) {
-    const missing=['led','resistor'].filter(kind=>!parts[kind]);
+  if (project.parts.some(kind=>!parts[kind])) {
+    const missing=project.parts.filter(kind=>!parts[kind]);
     return diagnostic('missing_parts','Place the components',
-      missing.length===2?'Add the LED and the 330 Ω resistor to the breadboard.':`Add ${missing[0]==='led'?'the LED':'the 330 Ω resistor'} to the breadboard.`,[],{missing});
+      `Add ${missing.map(kind=>project.labels[kind]).join(' and ')} to the breadboard.`,[],{missing});
   }
   const led=cleanPart('led',parts.led), resistor=cleanPart('resistor',parts.resistor);
   const la=root(led.a), lk=root(led.b), ra=root(resistor.a), rb=root(resistor.b);
@@ -233,11 +264,13 @@ export function validateCircuit(raw) {
   if (series(source,ground)) {
     if (activeNodes.has(supply)||activeNodes.has(vin)) return diagnostic('extra_supply','Disconnect the extra supply',
       'This build is driven by GPIO23. A 3V3 or VIN connection can feed the LED while GPIO23 is LOW.',[activeNodes.has(supply)?'pin:3V3':'pin:VIN']);
-    const extraPin=BOARD_PINS.find(id=>/^pin:\d+$/.test(id)&&id!=='pin:23'&&activeNodes.has(root(id)));
+    const allowed=['pin:23',...(project.id==='button'?['pin:18']:project.id==='potentiometer'?['pin:34']:[])];
+    const extraPin=BOARD_PINS.find(id=>/^pin:\d+$/.test(id)&&!allowed.includes(id)&&activeNodes.has(root(id)));
     if (extraPin) return diagnostic('extra_gpio','Use GPIO23 for this build',
-      `Disconnect ${endpointLabel(extraPin)} from the LED circuit. This Blink task drives GPIO23 only; other GPIO states are not modeled.`,[extraPin,'pin:23']);
-    return {ok:true,code:'complete',title:'Ready to blink',
-      message:'GPIO23, the resistor, the LED and GND form a complete series circuit.',
+      `Disconnect ${endpointLabel(extraPin)} from the LED circuit. This task drives GPIO23 only; other GPIO states are not modeled.`,[extraPin,'pin:23']);
+    const input=validateInputProject(raw,root,{ground,source,supply,vin,activeNodes});if(!input.ok)return input;
+    return {...input,ok:true,code:'complete',title:project.id==='blink'?'Ready to blink':'Ready to try',
+      message:project.id==='blink'?'GPIO23, the resistor, the LED and GND form a complete series circuit.':project.id==='button'?'The button switches GPIO18 to GND. Press it to light the LED.':'The wiper feeds GPIO34. Turn the dial to change LED brightness.',
       targets:['pin:23',resistor.a,resistor.b,led.a,led.b,'pin:GND'],
       interval:raw.interval,period:raw.interval*2,resistance:resistor.ohms};
   }
@@ -245,7 +278,7 @@ export function validateCircuit(raw) {
     'The long lead (+) must face GPIO23 through the circuit. The short lead (−) must face GND. Flip the LED.',partTargets(led));
   if (series(supply,ground)||series(supply,ground,lk,la)||series(vin,ground)||series(vin,ground,lk,la))
     return diagnostic('constant_power','Use the switching pin',
-      '3V3 is steady power; it cannot produce the Blink sketch’s pulses. Connect the input of this circuit to GPIO23, not 3V3 or VIN.', ['pin:23',series(supply,ground)||series(supply,ground,lk,la)?'pin:3V3':'pin:VIN']);
+      '3V3 is steady power. The sketch controls the LED through GPIO23, so connect the LED circuit to GPIO23 instead of 3V3 or VIN.', ['pin:23',series(supply,ground)||series(supply,ground,lk,la)?'pin:3V3':'pin:VIN']);
   if (!activeNodes.has(source)) {
     const other=BOARD_PINS.find(id=>!['pin:23','pin:GND','pin:GND2','pin:3V3','pin:VIN','pin:EN'].includes(id)&&activeNodes.has(root(id)));
     if(other)return diagnostic('wrong_gpio','The sketch uses GPIO23',
@@ -260,6 +293,93 @@ export function validateCircuit(raw) {
     [...partTargets(resistor),...partTargets(led)]);
 }
 
-export function ledIsOn(state, elapsedMs) {
-  return validateCircuit(state).ok && Number.isFinite(elapsedMs) && elapsedMs>=0 && Math.floor(elapsedMs/state.interval)%2===0;
+function buildNets(state){
+  const uf=new UnionFind();for(const id of endpoints)uf.join(id,netOf(id));
+  for(const wire of state.wires)uf.join(canonicalEndpoint(wire.from),canonicalEndpoint(wire.to));
+  const button=state.parts.button;
+  if(button){uf.join(canonicalEndpoint(button.a),canonicalEndpoint(button.b));uf.join(canonicalEndpoint(button.c),canonicalEndpoint(button.d));}
+  return uf;
+}
+
+function validateInputProject(state,root,{ground,source,supply,vin,activeNodes}){
+  const project=projectOf(state);if(project.id==='blink')return{ok:true};
+  const inputPin=project.id==='button'?'pin:18':'pin:34',input=root(inputPin);
+  if(input!==ground&&activeNodes.has(input))return diagnostic('input_output_join','Separate the input and LED output',
+    `${endpointLabel(inputPin)} senses the input; GPIO23 drives the LED. These must be separate signal connections.`,[inputPin,'pin:23']);
+  let inputNodes;
+  if(project.id==='button'){
+    const b=state.parts.button,a=root(b.a),c=root(b.c);inputNodes=new Set([a,c]);
+    if(a===c)return diagnostic('button_shorted','The button is already bridged',
+      'A1 and A2 are permanently connected; B1 and B2 are permanently connected. Keep the two sides separate until the button is pressed.',partTerminals('button',b));
+    if([source,supply,vin].some(n=>inputNodes.has(n)))return diagnostic('button_power','Switch the input to GND',
+      'Connect the button between GPIO18 and GND, not an output or power supply. INPUT_PULLUP provides the released HIGH level.',[inputPin,...partTerminals('button',b)]);
+    if(input===ground)return diagnostic('input_grounded','GPIO18 is always LOW',
+      'Remove the direct GPIO18-to-GND path. Only pressing the button should complete it.',[inputPin,'pin:GND']);
+    if(!((a===input&&c===ground)||(c===input&&a===ground)))return diagnostic('button_input','Connect opposite switch sides',
+      'Connect one permanently joined pair to GPIO18 and the other pair to GND. Either pair may be the input side.',[inputPin,'pin:GND',...partTerminals('button',b)]);
+  }else{
+    const p=state.parts.potentiometer,a=root(p.a),w=root(p.w),b=root(p.b);inputNodes=new Set([a,w,b]);
+    if(a===b||a===w||w===b)return diagnostic('pot_shorted','Give each potentiometer terminal its own connection',
+      'The outer terminals and wiper need three separate breadboard strips. Rotate or move the part if its legs share one row.',partTerminals('potentiometer',p));
+    if(a===vin||b===vin||w===vin)return diagnostic('pot_voltage','Use 3V3 for this input',
+      'Power the outer terminals from 3V3 and GND. VIN can exceed the 3.3 V input limit.', ['pin:VIN',...partTerminals('potentiometer',p)]);
+    if(w===supply||w===ground||input===supply||input===ground)return diagnostic('wiper_shorted','Let the wiper provide a variable signal',
+      'Do not tie the middle terminal or GPIO34 directly to 3V3 or GND. Connect the middle terminal to GPIO34.',[p.w,inputPin]);
+    if(!((a===supply&&b===ground)||(a===ground&&b===supply)))return diagnostic('pot_power','Power the two outer terminals',
+      'Connect one outer terminal to 3V3 and the other to GND. Swapping them reverses the dial direction.',[p.a,p.b,'pin:3V3','pin:GND']);
+    if(w!==input)return diagnostic('wiper_input','Connect the middle terminal to GPIO34',
+      'The wiper (W) supplies the changing voltage. GPIO34 reads that voltage.',[p.w,inputPin]);
+  }
+  const extra=BOARD_PINS.find(id=>/^pin:\d+$/.test(id)&&id!==inputPin&&inputNodes.has(root(id)));
+  if(extra)return diagnostic('extra_input_gpio','Use the project’s input pin',
+    `Disconnect ${endpointLabel(extra)} from the input circuit. This task reads ${endpointLabel(inputPin)}.`,[extra,inputPin]);
+  if(inputNodes.has(root('pin:EN')))return diagnostic('reset_pin','Keep EN separate','EN resets the board and is not a component input.', ['pin:EN']);
+  return {ok:true,...(project.id==='potentiometer'?{potReversed:root(state.parts.potentiometer.a)===supply}:{})};
+}
+
+export function simulationState(state,{elapsedMs=0,pressed=false,value=50}={}){
+  const check=validateCircuit(state),project=projectOf(state);
+  value=Number.isFinite(value)?Math.max(0,Math.min(100,value)):50;
+  const result={valid:check.ok,ledBrightness:0,inputLevel:null,adc:null,duty:null,pressed:!!pressed,value,status:check.ok?'Ready':check.message};
+  if(!check.ok)return result;
+  if(project.id==='button')return {...result,ledBrightness:pressed?1:0,inputLevel:pressed?'LOW':'HIGH',status:pressed?'Pressed · GPIO18 LOW':'Released · GPIO18 HIGH'};
+  if(project.id==='potentiometer'){
+    const fraction=check.potReversed?1-value/100:value/100,adc=Math.round(fraction*4095),duty=Math.floor(adc*255/4095);
+    return {...result,adc,duty,ledBrightness:duty/255,status:`ADC ${adc} / 4095 · PWM ${duty} / 255`};
+  }
+  const on=Number.isFinite(elapsedMs)&&elapsedMs>=0&&Math.floor(elapsedMs/state.interval)%2===0;
+  return {...result,ledBrightness:on?1:0,status:on?'GPIO23 HIGH · LED on':'GPIO23 LOW · LED off'};
+}
+export function ledIsOn(state,elapsedMs){return simulationState(state,{elapsedMs}).ledBrightness>0;}
+
+// Find an additive solution from actual nets, not a single memorized layout.
+// This never moves a component or deletes a user's wire. null means an existing
+// fault/placement must be corrected before a connection hint is possible.
+export function connectionPlan(state){
+  if(validInput(state)||projectOf(state).parts.some(kind=>!state.parts[kind]))return null;
+  if(validateCircuit(state).ok)return[];
+  const {led:l,resistor:r,button:b,potentiometer:p}=state.parts;
+  const indicatorPlans=[
+    [['pin:23',r.a],[r.b,l.a],[l.b,'pin:GND']],
+    [['pin:23',r.b],[r.a,l.a],[l.b,'pin:GND']],
+    [['pin:23',l.a],[l.b,r.a],[r.b,'pin:GND']],
+    [['pin:23',l.a],[l.b,r.b],[r.a,'pin:GND']],
+  ];
+  const inputPlans=projectOf(state).id==='button'?[[['pin:18',b.a],[b.c,'pin:GND']],[['pin:18',b.c],[b.a,'pin:GND']]]:
+    projectOf(state).id==='potentiometer'?[[['pin:GND',p.a],['pin:34',p.w],['pin:3V3',p.b]],[['pin:3V3',p.a],['pin:34',p.w],['pin:GND',p.b]]]:[[]];
+  let best=null;
+  for(const indicator of indicatorPlans)for(const input of inputPlans){
+    const trial=structuredClone(state),uf=buildNets(trial),planned=[];let failed=false;
+    for(const [a,b] of [...indicator,...input]){
+      const ar=uf.find(canonicalEndpoint(a)),br=uf.find(canonicalEndpoint(b));if(ar===br)continue;
+      const occupied=occupiedEndpoints(trial);
+      const choose=net=>endpoints.find(id=>!occupied.has(id)&&uf.find(id)===net);
+      const from=choose(ar),to=choose(br);
+      if(!from||!to||wireIssue(trial,from,to)){failed=true;break;}
+      let id=`hint-${planned.length}`;while(trial.wires.some(w=>w.id===id))id+='x';
+      trial.wires.push({id,from,to,color:WIRE_COLORS[0]});planned.push({from,to});uf.join(from,to);
+    }
+    if(!failed&&validateCircuit(trial).ok&&(!best||planned.length<best.length))best=planned;
+  }
+  return best;
 }

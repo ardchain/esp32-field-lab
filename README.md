@@ -10,7 +10,7 @@ An interactive, browser-based classroom for the original 30-pin ESP32 DevKit V1 
 - Direct interaction: hold a button, turn a knob, cover a light sensor, play piano keys or move a servo.
 - 68 visual connection steps: the camera frames each part and highlights exact pins and resistor values. Every Pinout row opens its matching explanation.
 - Electrical diagrams, a breadboard primer, Arduino examples, experiments and knowledge checks.
-- Build a Blink circuit: place an LED and resistor, connect real breadboard strips, check the circuit and test it in 3D.
+- Assembly practice for Blink, Button and Potentiometer: place components, connect real breadboard strips, check the circuit and operate it in 3D.
 - Saved lesson progress and assembly drafts in your current browser; no account or backend required.
 - A desktop workbench that fits the window, with scrolling inside the lesson panel; touch controls and page scrolling on phones.
 - Keyboard navigation and reduced-motion support.
@@ -44,15 +44,21 @@ Choose **Show the connections**, or select a **Pinout** row, for a guided close-
 
 ## Build a circuit
 
-Open **Build** in the navigation, or visit [the Blink workspace](https://ardchain.github.io/esp32-field-lab/#build-blink). The first assembly project starts with an ESP32 and an empty breadboard. Place the supplied LED and resistor, then select two contacts to add a wire. The top view supports precise editing; the 3D view uses the same board and component models as the course. Contact selectors provide an alternative to pointing at small holes.
+Open **Build** in the navigation and choose a project. Each starts with an ESP32 and an empty breadboard. Place components from the tray, then choose **Wire** and select two contacts. Drag a placed component to move it, or select it and choose a new hole. **Delete** and the keyboard Delete/Backspace keys remove parts or wires; Undo restores them. Scroll, pinch or use the separate **Zoom** slider to change the view. Contact selectors provide an alternative to pointing at small holes.
 
-![An assembled Blink circuit running in the Build workspace](docs/build.png)
+| Project | Circuit and behavior |
+| --- | --- |
+| [Blink](https://ardchain.github.io/esp32-field-lab/#build-blink) | GPIO23 drives an LED through a resistor; change its blink interval. |
+| [Button](https://ardchain.github.io/esp32-field-lab/#build-button) | Wire a four-leg switch to GPIO18 and GND; pressing it reads LOW and lights the LED. |
+| [Potentiometer](https://ardchain.github.io/esp32-field-lab/#build-potentiometer) | Power a 10 kΩ potentiometer from 3.3 V; its wiper feeds GPIO34 and controls LED brightness. |
+
+![A button-controlled LED assembled and running in the Build workspace](docs/build.png)
 
 **Check** evaluates connectivity, LED polarity, current limiting, occupied holes and power shorts. Valid layouts may use different rows, wire colors, power rails or a resistor on either side of the LED. Each breadboard row connects a–e separately from f–j; the four power rails are continuous and independent. Each contact holds one lead or jumper. The two ESP32 ground pins share a net but are separate physical contacts.
 
-Run is available after a successful check. Editing or restoring a draft stops playback and requires a fresh check. Hints help with the current circuit; undo preserves the previous edit, including a reset. Assembly drafts and completion are stored separately from lesson quizzes.
+Run is available after a successful check. Editing or restoring a draft stops playback and requires a fresh check. Hints show proposed components or wires at their actual positions, with short explanations beside the target. Undo preserves the previous edit, including a reset. Each project has its own saved draft; assembly completion is separate from lesson quizzes.
 
-This is a checker for the supplied Blink project, not an arbitrary electrical solver or C++ compiler. Its checked circuit drives the matching blink demonstration. Lesson scenes retain their illustrative wires; Build mode attaches its wires to the selected contacts.
+These are connectivity checkers for the three supplied projects, not an arbitrary electrical solver or C++ compiler. Each checked circuit drives its matching demonstration. The button models its two permanently connected leg pairs and its pressed state. The potentiometer models distinct track ends and a wiper, including reversed outer connections. Lesson scenes retain their illustrative wires; Build mode attaches its wires to the selected contacts.
 
 ## Project structure
 
@@ -62,7 +68,8 @@ This is a checker for the supplied Blink project, not an arbitrary electrical so
 | `dist/app.js` | Navigation, lesson panels, controls, quizzes and progress |
 | `dist/scene.js` | Procedural 3D models, camera, highlights, assembly rendering and interactions |
 | `dist/build.js`, `dist/build.css` | Assembly editor, hints, validation feedback and draft persistence |
-| `dist/build-circuit.js` | Breadboard nets, component footprints, occupancy and Blink circuit rules |
+| `dist/build-circuit.js` | Breadboard nets, component footprints, occupancy and project circuit rules |
+| `dist/build-projects.js` | Assembly project catalog, example placements, controls and sketches |
 | `dist/lessons.js` | Lesson content, Arduino sketches and component reference |
 | `dist/guides.js` | Step-by-step visual connection tours |
 | `dist/diagrams.js` | Circuit diagrams and breadboard connectivity |
@@ -80,7 +87,7 @@ npx playwright install --with-deps chromium
 npm test
 ```
 
-The checks cover all lessons, direct device interactions, visual-guide targets, navigation, camera bounds, quizzes, stored progress and narrow layouts. Assembly checks include breadboard connectivity, alternate valid circuits, common wiring faults, real pointer/keyboard/touch assembly, 3D playback, undo, saved drafts and downloaded code.
+The checks cover all lessons, direct device interactions, visual-guide targets, navigation, camera bounds, quizzes, stored progress and narrow layouts. Assembly checks include breadboard connectivity, alternate valid circuits, common wiring faults, real pointer/keyboard/touch assembly, wheel zoom, dragging, deletion, visual hints, 3D playback, undo, saved drafts and downloaded code.
 
 Run `npm run test:circuit` for the circuit rules alone, or `npm run test:build` for circuit rules plus assembly browser checks. Browser tests inject observation helpers into the served test response; production has no test globals. They start local servers on ports 4181, 4184, 4185 and 4194. Screenshots and reports go into temporary directories, or a directory set with `QA_OUTPUT`.
 
