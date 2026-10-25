@@ -183,6 +183,12 @@ function resolveInContext(context,requested,exclude=[]) {
   const available=id=>!context.occupied.has(id)&&!blocked.has(id);
   if(available(requested))return {ok:true,requested,endpoint:requested,redirected:false};
   const origin=parseEndpoint(requested),target=context.uf.find(requested);
+  // The two GND headers are joined inside the board. Keep a requested ground
+  // connection visibly on the board when its other physical header is free.
+  if(origin.kind==='pin'&&(origin.pin==='GND'||origin.pin==='GND2')){
+    const other=origin.pin==='GND'?'pin:GND2':'pin:GND';
+    if(available(other))return {ok:true,requested,endpoint:other,redirected:true};
+  }
   const routes=new Map([[origin.net,{hops:0,anchors:[requested]}]]),queue=[origin.net];
   for(let i=0;i<queue.length;i++){
     const current=routes.get(queue[i]);
@@ -197,7 +203,7 @@ function resolveInContext(context,requested,exclude=[]) {
   const candidates=endpoints.filter(id=>available(id)&&context.uf.find(id)===target).map(id=>{
     const point=parseEndpoint(id),route=routes.get(point.net);
     // First use the clicked strip/rail, then a nearby hole reached by a jumper
-    // or a permanent button pair. Another board pin is the final alternative.
+    // or a permanent button pair. Other board pins are the final alternative.
     const tier=point.kind==='pin'?2:point.net===origin.net?0:1;
     return {id,rank:[tier,route?.hops??Infinity,route?Math.min(...route.anchors.map(anchor=>distance(point,parseEndpoint(anchor)))):Infinity]};
   });

@@ -41,6 +41,7 @@ async function instrument(context){
       wireEnd:(id,end)=>{world.updateMatrixWorld(true);camera.updateMatrixWorld(true);const g=buildWireHandles.children.find(g=>g.userData.buildWireEnd?.id===id&&g.userData.buildWireEnd?.end===end);if(!g)return null;const q=g.getWorldPosition(new THREE.Vector3()).project(camera),r=renderer.domElement.getBoundingClientRect();return{x:r.left+(q.x+1)*r.width/2,y:r.top+(1-q.y)*r.height/2,anchor:g.userData.buildWireEnd.anchor};},
       wirePoint:id=>{world.updateMatrixWorld(true);camera.updateMatrixWorld(true);const r=renderer.domElement.getBoundingClientRect(),c=[];circuit.traverse(o=>{if(o.isMesh&&o.userData.buildWire===id)c.push(o);});for(const o of c)for(const t of [.35,.5,.65]){o.geometry.computeBoundingBox();const q=o.geometry.parameters.path?.getPointAt(t)||o.geometry.boundingBox.getCenter(new THREE.Vector3());q.applyMatrix4(o.matrixWorld).project(camera);const x=r.left+(q.x+1)*r.width/2,y=r.top+(1-q.y)*r.height/2;if(x<r.left||x>r.right||y<r.top||y>r.bottom)continue;if(hit({clientX:x,clientY:y})?.object.userData.buildWire===id)return{x,y};}return null;},
       copper:()=>buildCopper.children.map(m=>m.userData.buildCopper),
+      blankPoint:()=>{const r=renderer.domElement.getBoundingClientRect();for(const u of [.95,.05,.85,.15])for(const v of [.1,.9,.25,.75]){const e={clientX:r.x+r.width*u,clientY:r.y+r.height*v};if(!hit(e))return{x:e.clientX,y:e.clientY};}return null;},
       bounds:()=>{world.updateMatrixWorld(true);camera.updateMatrixWorld(true);let maxX=0,maxY=0;for(const parent of [board,circuit])parent.traverse(o=>{if(!o.isMesh)return;o.geometry.computeBoundingBox();const b=o.geometry.boundingBox;for(const x of [b.min.x,b.max.x])for(const y of [b.min.y,b.max.y])for(const z of [b.min.z,b.max.z]){const q=new THREE.Vector3(x,y,z).applyMatrix4(o.matrixWorld).project(camera);maxX=Math.max(maxX,Math.abs(q.x));maxY=Math.max(maxY,Math.abs(q.y));}});return{maxX,maxY};},
       point:kind=>{world.updateMatrixWorld(true);camera.updateMatrixWorld(true);const r=renderer.domElement.getBoundingClientRect(),candidates=[];circuit.traverse(o=>{if(o.isMesh&&o.userData.buildPart===kind)candidates.push(o);});const preferred=kind==='button'?anim.button:kind==='potentiometer'?anim.knob:null;candidates.sort((a,b)=>Number(b===preferred)-Number(a===preferred));for(const o of candidates){o.geometry.computeBoundingBox();const q=o.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(o.matrixWorld).project(camera),x=r.left+(q.x+1)*r.width/2,y=r.top+(1-q.y)*r.height/2;if(x<r.left||x>r.right||y<r.top||y>r.bottom)continue;const result=hit({clientX:x,clientY:y});if(result?.object.userData.buildPart===kind)return{x,y};}return null;},
       partSize:kind=>{world.updateMatrixWorld(true);camera.updateMatrixWorld(true);let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;circuit.traverse(o=>{if(!o.isMesh||o.userData.buildPart!==kind)return;o.geometry.computeBoundingBox();const b=o.geometry.boundingBox;for(const x of [b.min.x,b.max.x])for(const y of [b.min.y,b.max.y])for(const z of [b.min.z,b.max.z]){const q=new THREE.Vector3(x,y,z).applyMatrix4(o.matrixWorld).project(camera);minX=Math.min(minX,q.x);minY=Math.min(minY,q.y);maxX=Math.max(maxX,q.x);maxY=Math.max(maxY,q.y);}});return Math.hypot(maxX-minX,maxY-minY);},
@@ -71,7 +72,7 @@ const S={
   undo:'#build-undo',reset:'#build-reset',flip:'#build-flip',remove:'#build-remove',
   top:'#build-top',three:'#build-3d',back:'#build-exit',hint:'#build-hint',feedback:'#build-feedback',
 };
-async function activate(p,selector,touch=false){const l=p.locator(selector);if(touch)await l.tap();else await l.click();}
+async function activate(p,selector,touch=false){const l=p.locator(selector);if(!await l.isVisible()){const details=l.locator('xpath=ancestor::details[1]');if(await details.count()&&!await details.evaluate(e=>e.open)){const summary=details.locator(':scope > summary');if(touch)await summary.tap();else await summary.click();}}if(touch)await l.tap();else await l.click();}
 async function contact(p,id,{touch=false,keyboard=false,pointer=false}={}){
   if(pointer){const target=p.locator(`[data-build-contact="${id}"]`);await target.scrollIntoViewIfNeeded();const point=await center(target),canvas=await p.locator('#build-canvas-wrap').boundingBox();assert.ok(point.x>=canvas.x&&point.x<=canvas.x+canvas.width&&point.y>=canvas.y&&point.y<=canvas.y+canvas.height,'Requested contact is visibly inside the editor: '+id);if(touch)await p.touchscreen.tap(point.x,point.y);else await p.mouse.click(point.x,point.y);return;}
   if(!await p.locator('#build-contact-picker').evaluate(e=>e.open))await activate(p,'#build-open-picker',touch);
@@ -128,7 +129,7 @@ async function intuitiveEditing(p){
   const ghostBody=await center(p.locator('[data-build-ghost="resistor"]'));await p.mouse.click(ghostBody.x,ghostBody.y);
   assert.deepEqual([(await state(p)).parts.resistor.a,(await state(p)).parts.resistor.b],suggested,'Clicking the drawn ghost body places its complete displayed footprint');
   await activate(p,S.select);await activate(p,'#build-fit');
-  const start=await center(p.locator('[data-build-contact="bb:c6"]')),end=await center(p.locator('[data-build-contact="bb:c12"]'));
+  const from=await center(p.locator('[data-build-contact="bb:c6"]')),to=await center(p.locator('[data-build-contact="bb:c12"]')),start=await center(p.locator('[data-build-part="resistor"]')),end={x:start.x+to.x-from.x,y:start.y+to.y-from.y};
   const initialBox=await p.locator('[data-build-part="resistor"]').boundingBox(),view=await p.locator('#build-viewport').getAttribute('viewBox');
   await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(end.x,end.y,{steps:16});
   assert.ok(await p.locator('[data-build-ghost="resistor"]').count()>0,'Drag has a visible placement preview');
@@ -146,7 +147,7 @@ async function intuitiveEditing(p){
   await activate(p,S.reset);record('Select/Move drags a component; Delete key and visible Delete tool remove it with Undo');
 }
 async function switchProject(p,id,{guided=false}={}){
-  await p.locator('#build-project').selectOption(id);
+  await activate(p,'#build-project');await activate(p,`#build-project-options [data-project-id="${id}"]`);
   await p.waitForFunction(id=>location.hash==='#build-'+id&&globalThis.__buildQa?.getState().project===id,id);
   const toggle=p.locator(guided?'#build-guided':'#build-free');if(await toggle.count()&&await toggle.isVisible())await toggle.click();
   assert.equal(await running(p),false);assert.equal(await p.locator(S.run).isDisabled(),true);
@@ -208,9 +209,11 @@ async function projectExercises(p,blinkDraft){
   const coveredContact='bb:j'+beforeBridge.parts.potentiometer.w.match(/\d+$/)[0];
   await activate(p,S.select);await activate(p,'#build-fit');const coveredPoint=await center(p.locator(`[data-build-contact="${coveredContact}"]`));
   assert.equal(await p.evaluate(point=>document.elementFromPoint(point.x,point.y)?.closest('[data-build-part]')?.dataset.buildPart,coveredPoint),'potentiometer','The chosen contact really lies under the dial body in Select mode');
-  await wire(p,coveredContact,await spareStripContact(p,powerContact,beforeBridge),{pointer:true});
+  const spare=await spareStripContact(p,powerContact,beforeBridge);
+  assert.ok(Number(await p.locator('[data-build-part="potentiometer"]').evaluate(e=>getComputedStyle(e).opacity))<.9,'Explicit Wire mode exposes the covered contact');
+  await wire(p,coveredContact,spare,{pointer:true});
   assert.equal((await state(p)).wires.at(-1).from,coveredContact,'Wire mode reaches the formerly blocked contact without forced clicks');
-  assert.ok(Number(await p.locator('[data-build-part="potentiometer"]').evaluate(e=>getComputedStyle(e).opacity))<.9);
+  assert.equal(Number(await p.locator('[data-build-part="potentiometer"]').evaluate(e=>getComputedStyle(e).opacity)),1,'Committing returns to ordinary opaque editing');
   await activate(p,S.check);
   assert.equal(await p.locator(S.run).isDisabled(),true);assert.match(await p.locator(S.feedback).innerText(),/terminal|wiper|middle|separate/i);
   await screenshot(p,'dial-wrong-wiper');await removeLastWire(p);await activate(p,S.select);await activate(p,'#build-fit');
@@ -272,7 +275,7 @@ async function wireRetryExercises(p){
   const relocationText=await p.locator(S.feedback).innerText();assert.match(relocationText,/E6/i);assert.match(relocationText,new RegExp(chosen.slice(3),'i'),'The remapped contact is explicitly explained');
   await contact(p,'bb:e6',{pointer:true});assert.equal(await p.locator('.build-contact.is-first').count(),0,'Clicking the same requested source again cancels');
 
-  await contact(p,'pin:GND',{pointer:true});await contact(p,'rail:L+:16',{pointer:true});
+  await activate(p,S.wire);await contact(p,'pin:GND',{pointer:true});await contact(p,'rail:L+:16',{pointer:true});
   assert.equal((await state(p)).wires.length,2,'Already connected nets do not receive another redundant wire');
   assert.equal(await p.locator('.build-contact.is-first').count(),0,'Already-connected attempt releases its pending source');
   assert.match(await p.locator(S.feedback).innerText(),/already connected/i);assert.notEqual(await p.locator(S.feedback).getAttribute('data-tone'),'error');
@@ -328,12 +331,116 @@ async function settleScene(p){
 }
 async function selectDrawnWire(p,id,{three=false,touch=false}={}){
   if(three){await p.waitForFunction(id=>!!__buildSceneQa.wirePoint(id),id);const point=await p.evaluate(id=>__buildSceneQa.wirePoint(id),id);await p.mouse.click(point.x,point.y);}
-  else{const g=p.locator(`[data-build-wire="${id}"]`);if(await g.evaluate(e=>e.classList.contains('is-selected')))return;const point=await wireBodyPoint(p,id);assert.ok(point,'The committed wire has a visible body to select');if(touch)await p.touchscreen.tap(point.x,point.y);else await p.mouse.click(point.x,point.y);}
+  else{const g=p.locator(`[data-build-wire="${id}"]`);if(await g.evaluate(e=>e.classList.contains('is-selected')))return;const point=await wireBodyPoint(p,id);assert.ok(point,'The committed wire has a visible body to select');if(touch){await p.evaluate(()=>{globalThis.__touchTarget=null;document.addEventListener('pointerdown',e=>{globalThis.__touchTarget={x:e.clientX,y:e.clientY,target:e.target.outerHTML.slice(0,500)};},{once:true,capture:true});});await p.touchscreen.tap(point.x,point.y);}else await p.mouse.click(point.x,point.y);assert.equal(await g.evaluate(e=>e.classList.contains('is-selected')),true,'Tapping the visible wire body must select it: '+JSON.stringify({point,target:touch?await p.evaluate(()=>__touchTarget):null}));}
   assert.ok((await state(p)).wires.some(w=>w.id===id),'First body click selects without deleting');
 }
-async function dragBetween(p,start,end,{touch=false,via=null}={}){
-  if(touch){const c=await p.context().newCDPSession(p),point=(x,y)=>[{id:1,x,y,radiusX:7,radiusY:7}];await c.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:point(start.x,start.y)});const points=via?[via,end]:[end];let from=start;for(const target of points){for(let i=1;i<=12;i++)await c.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:point(from.x+(target.x-from.x)*i/12,from.y+(target.y-from.y)*i/12)});from=target;}await c.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await c.detach();}
-  else{await p.mouse.move(start.x,start.y);await p.mouse.down();if(via)await p.mouse.move(via.x,via.y,{steps:10});await p.mouse.move(end.x,end.y,{steps:14});await p.mouse.up();}
+async function dragBetween(p,start,end,{touch=false,via=null,onDown=null}={}){
+  if(touch){const c=await p.context().newCDPSession(p),point=(x,y)=>[{id:1,x,y,radiusX:7,radiusY:7}];await c.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:point(start.x,start.y)});if(onDown)await onDown();const points=via?[via,end]:[end];let from=start;for(const target of points){for(let i=1;i<=12;i++)await c.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:point(from.x+(target.x-from.x)*i/12,from.y+(target.y-from.y)*i/12)});from=target;}await c.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await c.detach();}
+  else{await p.mouse.move(start.x,start.y);await p.mouse.down();if(onDown)await onDown();if(via)await p.mouse.move(via.x,via.y,{steps:10});await p.mouse.move(end.x,end.y,{steps:14});await p.mouse.up();}
+}
+async function clickAt(p,point,touch=false){if(touch)await p.touchscreen.tap(point.x,point.y);else await p.mouse.click(point.x,point.y);}
+async function mobileFirstBodyDrag(p){
+  await p.locator('#build-canvas-wrap').scrollIntoViewIfNeeded();
+  const body=await center(p.locator('[data-build-part="resistor"]')),from=await endpointPoint(p,'bb:c6'),to=await endpointPoint(p,'bb:c16'),before=await p.locator('#build-canvas-wrap').boundingBox();
+  await dragBetween(p,body,{x:body.x+to.x-from.x,y:body.y+to.y-from.y},{touch:true,onDown:async()=>{const after=await p.locator('#build-canvas-wrap').boundingBox();assert.ok(Math.abs(after.y-before.y)<=1&&Math.abs(after.height-before.height)<=1,'Selecting a part must not move the phone canvas beneath the finger: '+JSON.stringify({before,after}));}});
+  assert.equal((await state(p)).parts.resistor.a,'bb:c16');
+}
+async function blankCanvasPoint(p,three=false){
+  if(three){const point=await p.evaluate(()=>__buildSceneQa.blankPoint());assert.ok(point,'A visible empty background remains available for orbiting');return point;}
+  const rect=await p.locator('#build-canvas-wrap').boundingBox();
+  const point=await p.evaluate(r=>{for(const u of [.95,.05,.85,.15])for(const v of [.1,.9,.25,.75]){const x=r.x+r.width*u,y=r.y+r.height*v,e=document.elementFromPoint(x,y);if(e?.closest('#build-viewport')&&!e.closest('[data-build-contact],[data-build-part],[data-build-wire],[data-build-ghost]'))return{x,y};}return null;},rect);
+  assert.ok(point,'A visible empty background remains available for panning');return point;
+}
+async function cancelDuringDrag(p,start,to,method,{touch=false}={}){
+  let session;
+  if(touch){session=await p.context().newCDPSession(p);await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...start,radiusX:5,radiusY:5}]});await session.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{id:1,...to,radiusX:5,radiusY:5}]});}
+  else{await p.mouse.move(start.x,start.y);await p.mouse.down();await p.mouse.move(to.x,to.y,{steps:10});}
+  assert.equal(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination','The held gesture has a real pending source');
+  if(method==='Escape')await p.keyboard.press('Escape');else await p.mouse.click(to.x,to.y,{button:'right'});
+  assert.notEqual(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination','Cancellation immediately removes the pending source');
+  if(touch){await session.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await session.detach();}else await p.mouse.up();
+  assert.notEqual(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination','The original pointer-up cannot recreate the cancelled draft');
+  assert.equal(await p.locator('[data-build-ghost="wire"]').count(),0,'No stale wire preview remains after cancellation');
+}
+async function defaultWiringExercises(p,{three=false,touch=false}={}){
+  const label=three?(touch?'3D touch':'3D mouse'):(touch?'2D touch':'2D mouse'),empty=await state(p);
+  assert.equal(empty.wires.length,0);assert.equal(await p.locator('#build-root').getAttribute('data-tool'),'select');
+  await activate(p,'#build-fit',touch);if(three){await activate(p,S.three,touch);await p.locator('#build-scene3d canvas').waitFor();await settleScene(p);}
+  if(touch)await p.locator('#build-canvas-wrap').scrollIntoViewIfNeeded();
+  const point=id=>endpointPoint(p,id,{three}),onDown=async()=>assert.equal(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination','Pressing the visible contact arms the new wire before any movement');
+  await dragBetween(p,await point('pin:23'),await point('bb:a6'),{touch,onDown});
+  let built=await state(p);assert.equal(built.wires.length,1,'A normal contact drag creates a wire without choosing Wire');assert.deepEqual([built.wires[0].from,built.wires[0].to],['pin:23','bb:a6']);
+  assert.notEqual(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination');
+  if(three){const frame=await p.evaluate(()=>__buildSceneQa.frames());await p.waitForFunction(n=>__buildSceneQa.frames()>n,frame);assert.ok(await p.evaluate(id=>!!__buildSceneQa.wirePoint(id),built.wires[0].id),'The new wire has a rendered selectable 3D body');}
+  else assert.equal(await p.locator('[data-build-wire]').count(),1);
+  await screenshot(p,'default-wire-'+label.replaceAll(' ','-'));await activate(p,S.undo,touch);assert.deepEqual(await state(p),empty);
+  if(touch)await p.locator('#build-canvas-wrap').scrollIntoViewIfNeeded();if(three)await settleScene(p);
+  await clickAt(p,await point('pin:18'),touch);assert.equal(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination');
+  await clickAt(p,await point('bb:j16'),touch);built=await state(p);assert.equal(built.wires.length,1);assert.deepEqual([built.wires[0].from,built.wires[0].to],['pin:18','bb:j16']);
+  if(three)await settleScene(p);record(label+' default contact drag and click-click both create visible wires without selecting a tool');
+
+  // Failed gestures must not enter history or leave an invisible half-wire.
+  const bad=await blankCanvasPoint(p,three);await dragBetween(p,await point('pin:23'),bad,{touch,onDown});
+  assert.deepEqual(await state(p),built);assert.notEqual(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination');
+  const original=await point('pin:23');await dragBetween(p,original,original,{touch,onDown,via:{x:original.x+20,y:original.y+12}});
+  assert.deepEqual(await state(p),built);assert.notEqual(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination');
+  await activate(p,S.undo,touch);assert.deepEqual(await state(p),empty,'Invalid and original-endpoint drops add no Undo entries');
+  if(touch)await p.locator('#build-canvas-wrap').scrollIntoViewIfNeeded();if(three)await settleScene(p);
+  for(const method of touch?['Escape']:['Escape','right-click']){
+    await clickAt(p,await point('pin:18'),touch);await clickAt(p,await point('bb:j16'),touch);const before=await state(p);if(three)await settleScene(p);
+    await cancelDuringDrag(p,await point('pin:23'),await point('bb:a6'),method,{touch});assert.deepEqual(await state(p),before);
+    await activate(p,S.undo,touch);assert.deepEqual(await state(p),empty,'A cancelled drag adds no Undo entry');
+    if(touch)await p.locator('#build-canvas-wrap').scrollIntoViewIfNeeded();if(three)await settleScene(p);
+  }
+  const beforePan=three?await p.evaluate(()=>__buildSceneQa.state().rotation):await p.locator('#build-viewport').getAttribute('viewBox'),background=await blankCanvasPoint(p,three),rect=await p.locator('#build-canvas-wrap').boundingBox();
+  await dragBetween(p,background,{x:background.x+(background.x>rect.x+rect.width/2?-45:45),y:background.y+15},{touch});
+  assert.deepEqual(await state(p),empty);assert.notEqual(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination');
+  if(three)await p.waitForFunction(n=>Math.abs(__buildSceneQa.state().rotation-n)>.01,beforePan);else assert.notEqual(await p.locator('#build-viewport').getAttribute('viewBox'),beforePan);
+  await activate(p,'#build-fit',touch);if(touch)await p.locator('#build-canvas-wrap').scrollIntoViewIfNeeded();if(three)await settleScene(p);
+  if(touch){
+    const first=await point('bb:f16'),session=await p.context().newCDPSession(p),one={id:1,...first,radiusX:4,radiusY:4},two={id:2,x:first.x+30,y:first.y,radiusX:4,radiusY:4};
+    await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[one]});await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[one,two]});
+    for(const d of [8,16,24])await session.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{...one,x:one.x-d},{...two,x:two.x+d}]});
+    await session.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await session.detach();
+    assert.deepEqual(await state(p),empty,'A second finger changes the contact gesture into pinch without creating a wire');assert.notEqual(await p.locator('#build-root').getAttribute('data-wire-stage'),'destination');
+  }
+  record(label+' invalid/no-op drops and cancellation preserve Undo; background navigation never creates a wire');
+  if(!three){
+    await activate(p,'#build-fit',touch);await place(p,'resistor','bb:c6',{pointer:true,touch});const part=(await state(p)).parts.resistor;
+    await activate(p,'#build-fit',touch);if(touch)await p.locator('#build-canvas-wrap').scrollIntoViewIfNeeded();
+    await clickAt(p,await point('pin:23'),touch);await clickAt(p,await point('bb:a6'),touch);
+    assert.deepEqual((await state(p)).parts.resistor,part,'Wiring while a part is selected never relocates that part');assert.equal((await state(p)).wires.length,1);
+    record(label+' free-contact clicks wire normally while an existing component is selected');
+  }
+}
+async function pickerExercises(p,{touch=false}={}){
+  const expected=await p.evaluate(async()=>{const {lessons}=await import('./lessons.js');return ['blink','button','potentiometer'].map(id=>({id,title:lessons.find(l=>l.id===id).title}));});
+  assert.equal(await p.locator('#build-project').evaluate(e=>e.tagName),'BUTTON');await activate(p,'#build-project',touch);
+  assert.equal(await p.locator('#build-project').getAttribute('aria-expanded'),'true');assert.equal(await p.locator('#build-project-options [role="option"]').count(),3);
+  for(const project of expected)assert.ok((await p.locator(`#build-project-options [data-project-id="${project.id}"]`).innerText()).includes(project.title),'The picker uses the exact lesson title: '+project.title);
+  await screenshot(p,touch?'project-picker-touch':'project-picker-desktop');
+  if(!touch){
+    await p.keyboard.press('Escape');assert.equal(await p.locator('#build-project').getAttribute('aria-expanded'),'false');assert.equal(await p.locator('#build-project').evaluate(e=>e===document.activeElement),true);
+    await activate(p,'#build-project');await p.locator('.build-heading p').click();assert.equal(await p.locator('#build-project').getAttribute('aria-expanded'),'false');
+    await p.locator('#build-project').focus();await p.keyboard.press('ArrowDown');await p.keyboard.press('Home');await p.keyboard.press('ArrowDown');await p.keyboard.press('Enter');
+    await p.waitForFunction(()=>location.hash==='#build-button'&&__buildQa.getState().project==='button');
+    await p.locator('#build-project').focus();await p.keyboard.press('ArrowDown');await p.keyboard.press('End');await p.keyboard.press('Space');await p.waitForFunction(()=>location.hash==='#build-potentiometer'&&__buildQa.getState().project==='potentiometer');
+  }else{
+    for(const width of [390,320]){await p.setViewportSize({width,height:844});const b=await p.locator('#build-project-options').boundingBox();assert.ok(b.x>=0&&b.x+b.width<=width,'Phone menu stays within its viewport');await fits(p,width+'px custom project picker');}
+    await activate(p,'#build-project-options [data-project-id="button"]',true);await p.waitForFunction(()=>location.hash==='#build-button'&&__buildQa.getState().project==='button');
+  }
+  await switchProject(p,'blink');await ready(p);assert.equal(await p.locator('#build-project-options').isVisible(),false);
+  assert.ok((await p.locator('#build-project').innerText()).includes(expected[0].title));
+  record(touch?'Custom project menu fits 390/320px phones and touch switches the actual route':'Custom project menu uses lesson titles, supports pointer/keyboard selection, and closes with Escape/outside click');
+}
+async function defaultInteractionSuite(browser,track){
+  for(const options of [{},{three:true},{touch:true},{three:true,touch:true}]){
+    if(process.env.QA_VIEW==='2d'&&options.three)continue;
+    const context=await browser.newContext({viewport:{width:options.touch?390:1366,height:options.touch?844:768},isMobile:!!options.touch,hasTouch:!!options.touch,reducedMotion:'reduce'});await instrument(context);
+    const p=await context.newPage();track(p);await p.goto(origin+'#build-blink',{waitUntil:'networkidle'});await ready(p);
+    if(!options.three&&!process.env.QA_SKIP_PICKER){await pickerExercises(p,options);if(options.touch)await p.setViewportSize({width:390,height:844});}
+    await defaultWiringExercises(p,options);await context.close();
+  }
 }
 async function wireEndPoint(p,id,end,{three=false}={}){
   if(three){await p.waitForFunction(({id,end})=>!!__buildSceneQa.wireEnd(id,end),{id,end});return p.evaluate(({id,end})=>__buildSceneQa.wireEnd(id,end),{id,end});}
@@ -378,7 +485,7 @@ async function repeatBodyDeleteExercises(p,original){
   await activate(p,S.undo);assert.deepEqual(await state(p),original);
   await activate(p,S.select);const part=p.locator('[data-build-part="led"]');await part.click();assert.ok((await state(p)).parts.led);await part.click();
   assert.equal((await state(p)).parts.led,null,'Second click on the selected part body deletes it');await activate(p,S.undo);assert.deepEqual(await state(p),original);
-  await activate(p,S.select);await part.click();const start=await endpointPoint(p,'bb:e5'),to=await endpointPoint(p,'bb:e12');await dragBetween(p,start,to);
+  await activate(p,S.select);await part.click();const start=await center(part),a=await endpointPoint(p,'bb:e5'),b=await endpointPoint(p,'bb:e12');await dragBetween(p,start,{x:start.x+b.x-a.x,y:start.y+b.y-a.y});
   assert.equal((await state(p)).parts.led.a,'bb:e12','Dragging an already selected body moves it instead of deleting it');await activate(p,S.undo);assert.deepEqual(await state(p),original);
   record('Repeated body clicks delete selected parts/wires directly; dragging an already selected body does not delete it');
 }
@@ -512,6 +619,13 @@ async function main(){
       assert.deepEqual(errors,[]);writeReport();return;
     }
     if(process.env.QA_CASE==='camera'){await page.emulateMedia({reducedMotion:'no-preference'});await activeCameraDragExercises(page);assert.deepEqual(errors,[]);writeReport();return;}
+    if(process.env.QA_CASE==='default-wiring'){await ctx.close();await defaultInteractionSuite(browser,p=>{page=p;collect(p);});assert.deepEqual(errors,[]);writeReport();return;}
+    if(process.env.QA_CASE==='mobile-drag'){
+      await ctx.close();const mobileContext=await browser.newContext({viewport:{width:320,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'});await instrument(mobileContext);page=await mobileContext.newPage();collect(page);await page.goto(origin+'#build-blink',{waitUntil:'networkidle'});await ready(page);await assemble(page,{touch:true});await checkAndRun(page,{touch:true});await activate(page,S.select,true);await activate(page,'#build-fit',true);await mobileFirstBodyDrag(page);record('The first body drag keeps a narrow phone canvas stable and reaches its intended row');assert.deepEqual(errors,[]);writeReport();return;
+    }
+    if(process.env.QA_CASE==='touch-endpoint'){
+      await ctx.close();const touchContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'});await instrument(touchContext);page=await touchContext.newPage();collect(page);await page.goto(origin+'#build-blink',{waitUntil:'networkidle'});await ready(page);await endpointEditingExercises(page,{touch:true});assert.deepEqual(errors,[]);writeReport();return;
+    }
     if(process.env.QA_CASE==='guidance'){await guidanceSuite(page);assert.deepEqual(errors,[]);writeReport();return;}
     assert.equal(await page.locator('#lesson-main').isVisible(),false);assert.deepEqual((await state(page)).parts,{led:null,resistor:null});
     await fits(page,'1366×768 empty builder');await screenshot(page,'desktop-empty');
@@ -587,7 +701,7 @@ async function main(){
 
     // Pointer selection and movement exercise the actual SVG hit targets.
     const beforeMove=await state(page);await activate(page,S.select);await selectedPart(page,'resistor');await page.locator('#build-fit').click();
-    await contact(page,'bb:c16',{pointer:true});
+    const bodyMove=await center(page.locator('[data-build-part="resistor"]')),oldAnchor=await endpointPoint(page,'bb:c6'),newAnchor=await endpointPoint(page,'bb:c16');await dragBetween(page,bodyMove,{x:bodyMove.x+newAnchor.x-oldAnchor.x,y:bodyMove.y+newAnchor.y-oldAnchor.y});
     assert.equal((await state(page)).parts.resistor.a,'bb:c16');assert.equal(await running(page),false);
     await page.locator(S.check).click();assert.equal(await page.locator(S.run).isDisabled(),true);
     await page.locator(S.undo).click();assert.deepEqual(await state(page),beforeMove);
@@ -641,8 +755,8 @@ async function main(){
     await m.setViewportSize({width:320,height:844});await fits(m,'320px touch');await screenshot(m,'mobile-320');
     await activate(m,S.hint,true);assert.equal(await running(m),true,'Reading a hint does not edit a working circuit');
     await activate(m,S.three,true);await m.locator('#build-scene3d canvas').waitFor();await screenshot(m,'mobile-3d');record('390/320px touch builder and 3D remain usable');
-    await activate(m,S.top,true);await activate(m,S.resistor,true);await activate(m,'#build-fit',true);
-    await contact(m,'bb:c16',{pointer:true,touch:true});assert.equal((await state(m)).parts.resistor.a,'bb:c16');
+    await activate(m,S.top,true);await activate(m,S.select,true);await activate(m,'#build-fit',true);
+    await mobileFirstBodyDrag(m);
     await activate(m,S.undo,true);assert.equal((await state(m)).parts.resistor.a,'bb:c6');
     await activate(m,'#build-fit',true);await screenshot(m,'mobile-fit');
     await m.getByText('Blink timing & code',{exact:true}).tap();await fits(m,'320px expanded code');
@@ -684,6 +798,7 @@ async function main(){
     page=await phoneEdit.newPage();collect(page);await page.goto(origin+'#build-blink',{waitUntil:'networkidle'});await ready(page);await endpointEditingExercises(page,{touch:true});await mobileGuideExercises(page);await phoneEdit.close();
     const guided=await browser.newContext({viewport:{width:1366,height:768},reducedMotion:'reduce'});await instrument(guided);
     page=await guided.newPage();collect(page);await page.goto(origin+'#build-blink',{waitUntil:'networkidle'});await ready(page,{preserve:true});await guidanceSuite(page);
+    await guided.close();await defaultInteractionSuite(browser,p=>{page=p;collect(p);});
     assert.deepEqual(errors,[]);writeReport();
   }catch(e){if(page)await screenshot(page,'failure').catch(()=>{});fs.writeFileSync(path.join(out,'failure.json'),JSON.stringify({error:String(e),checks,errors},null,2));throw e;}
   finally{await browser.close();await new Promise(r=>server.close(r));}

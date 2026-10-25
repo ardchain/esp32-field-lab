@@ -349,10 +349,10 @@ const assert=require('node:assert/strict');
     const raw=clone(s);raw.wires.push(wire('collision','bb:e6','bb:c11'));verdict(raw,'occupied_contact');
     assert.equal(M.normalizeState(raw).wires.length,s.wires.length);
   });
-  test('occupied GPIO and ground clicks find nearby holes at attached jumper ends',()=>{
+  test('occupied GPIO clicks find jumper holes while ground prefers its other board header',()=>{
     const s=screenshotBuild();assert.equal(M.resolveWireEndpoint(s,'pin:23').endpoint,'bb:e8');
-    assert.equal(M.resolveWireEndpoint(s,'pin:GND').endpoint,'rail:L+:15');
-    const link=M.resolveWireConnection(s,'pin:GND','bb:e7');assert.equal(link.from,'rail:L+:15');assert.equal(link.to,'bb:d7');
+    assert.equal(M.resolveWireEndpoint(s,'pin:GND').endpoint,'pin:GND2');
+    const link=M.resolveWireConnection(s,'pin:GND','bb:e7');assert.equal(link.from,'pin:GND2');assert.equal(link.to,'bb:d7');
     assert.equal(M.wireIssue(s,link.from,link.to),null);
     // A free hole in the originally clicked strip takes priority over remote holes.
     s.wires.push(wire('branch','bb:a6','bb:a24'));assert.equal(M.resolveWireEndpoint(s,'bb:e6').endpoint,'bb:d6');
@@ -402,7 +402,7 @@ const assert=require('node:assert/strict');
     assert.equal(M.resolveWireConnection(s,'rail:L+:16','rail:L+:1').alreadyConnected,true);
     assert.equal(M.resolveWireEndpoint(s,'rail:L-:16').endpoint,'rail:L-:16');
   });
-  test('resolution follows jumper chains and falls back to a free common ground header',()=>{
+  test('resolution follows jumper chains and can use a free common ground header',()=>{
     const s=M.initialState();s.wires=[wire('a','pin:GND','pin:22')];
     assert.equal(M.resolveWireEndpoint(s,'pin:GND').endpoint,'pin:GND2');
     const chain=M.initialState();chain.wires=[wire('a','pin:23','bb:a1'),wire('b','bb:b1','bb:c1'),
@@ -410,6 +410,39 @@ const assert=require('node:assert/strict');
     assert.equal(M.resolveWireEndpoint(chain,'pin:23').code,'no_free_contact');
     chain.wires[2].to='rail:R-:14';assert.equal(M.resolveWireEndpoint(chain,'pin:23').endpoint,'bb:e1');
     chain.wires.push(wire('d','bb:e1','rail:R-:18'));assert.equal(M.resolveWireEndpoint(chain,'pin:23').endpoint,'rail:R-:13');
+  });
+  test('the other ground header preference is symmetric, respects reservations and keeps local clicks local',()=>{
+    const s=screenshotBuild(),before=JSON.stringify(s);
+    assert.equal(M.resolveWireEndpoint(s,'pin:GND-R').endpoint,'pin:GND2');
+    assert.equal(M.resolveWireEndpoint(s,'pin:GND',{exclude:['pin:GND-L']}).endpoint,'rail:L+:15');
+    assert.equal(M.resolveWireEndpoint(s,'rail:L+:16').endpoint,'rail:L+:15');
+    s.wires[1].from='pin:GND2';assert.equal(M.resolveWireEndpoint(s,'pin:GND-L').endpoint,'pin:GND');
+    s.wires[1].from='pin:GND';assert.equal(JSON.stringify(s),before);
+    s.wires.push(wire('left-ground','pin:GND2','bb:a24'));
+    const fallback=M.resolveWireEndpoint(s,'pin:GND').endpoint;
+    assert.equal(fallback,'bb:b24');assert.equal(M.electricallyConnected(s,fallback,'pin:GND'),true);
+  });
+  test('the shared-ground button screenshot remains valid while new ground wiring can go directly to the board',()=>{
+    const s=projectSetup('button');s.wires=[wire('source','pin:23','bb:b6'),wire('ground','pin:GND','bb:c10'),
+      wire('input','pin:18','bb:c16'),wire('button-ground','bb:g16','bb:d10')];
+    const before=JSON.stringify(s);verdict(s,'complete');assert.equal(M.simulationState(s,{pressed:true}).ledBrightness,1);
+    assert.equal(M.simulationState(s,{pressed:false}).inputLevel,'HIGH');assert.deepEqual(M.normalizeState(s),s);
+    assert.equal(JSON.stringify(s),before);
+    const partial=clone(s);partial.wires.pop();const link=M.resolveWireConnection(partial,'bb:f16','pin:GND');
+    assert.equal(link.ok,true);assert.equal(link.to,'pin:GND2');
+    partial.wires.push(wire('direct-ground',link.from,link.to));verdict(partial,'complete');assert.equal(partial.wires.length,4);
+  });
+  test('a compact button layout can share the grounded LED row and use three jumpers',()=>{
+    const s={...M.initialState('button'),parts:{resistor:{a:'bb:c6',b:'bb:c9',ohms:330},
+      led:{a:'bb:b9',b:'bb:b10'},button:{a:'bb:d8',b:'bb:d10',c:'bb:f8',d:'bb:f10'}},
+      wires:[wire('source','pin:23','bb:a6'),wire('ground','pin:GND','bb:a10'),wire('input','pin:18','bb:g8')]};
+    verdict(s,'complete');assert.equal(s.wires.length,3);assert.deepEqual(M.normalizeState(s),s);
+    assert.equal(M.electricallyConnected(s,'bb:b10','bb:d10'),true);
+    assert.equal(M.electricallyConnected(s,'bb:d8','pin:GND'),true);
+    assert.equal(M.electricallyConnected(s,'pin:18','pin:GND'),false);
+    const released=M.simulationState(s,{pressed:false}),pressed=M.simulationState(s,{pressed:true});
+    assert.equal(released.inputLevel,'HIGH');assert.equal(released.ledBrightness,0);
+    assert.equal(pressed.inputLevel,'LOW');assert.equal(pressed.ledBrightness,1);
   });
   test('physical resolution preserves wrong-pin choices for circuit validation and is pure',()=>{
     const s=screenshotBuild(),before=JSON.stringify(s),link=M.resolveWireConnection(s,'pin:22','bb:c11');

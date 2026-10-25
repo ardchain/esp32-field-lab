@@ -18,7 +18,7 @@ export function createScene(container, callbacks = {}) {
     fallback.style.cssText='height:100%;display:grid;place-content:center;text-align:center;padding:28px;color:#284944;font:14px/1.6 sans-serif';
     fallback.innerHTML='<strong>Explore the ESP32</strong><span>The interactive board needs WebGL.<br>Try a recent version of Chrome, Edge, Firefox or Safari.<br>You can still read every lesson and use the pin guide.</span>';
     container.append(fallback); callbacks.onReady?.();
-    return {setLesson:noop,setRunning:noop,setValue:noop,setPressed:noop,setLabels:noop,setFlow:noop,setBuildState:noop,setBuildRunning:noop,setBuildHighlight:noop,setBuildSelection:noop,setBuildConnections:noop,setBuildWirePending:noop,setBuildTool:noop,setBuildGhost:noop,setBuildZoom:noop,getBuildZoom:()=>1,projectBuildEndpoint:()=>null,setBuildInputs:noop,setBuildSimulation:noop,focusBuildTargets:()=>({resolved:[],unresolved:[]}),reset:noop,rotate:noop,zoom:noop,focus:({targets=[]}={})=>({resolved:[],unresolved:targets}),clearFocus:noop,dispose:()=>fallback.remove()};
+    return {setLesson:noop,setRunning:noop,setValue:noop,setPressed:noop,setLabels:noop,setFlow:noop,setBuildState:noop,setBuildRunning:noop,setBuildHighlight:noop,setBuildSelection:noop,setBuildConnections:noop,setBuildWirePending:noop,setBuildWireDraft:noop,cancelBuildGesture:noop,setBuildTool:noop,setBuildGhost:noop,setBuildZoom:noop,getBuildZoom:()=>1,projectBuildEndpoint:()=>null,setBuildInputs:noop,setBuildSimulation:noop,focusBuildTargets:()=>({resolved:[],unresolved:[]}),reset:noop,rotate:noop,zoom:noop,focus:({targets=[]}={})=>({resolved:[],unresolved:targets}),clearFocus:noop,dispose:()=>fallback.remove()};
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
   renderer.setClearColor(0xf4f3ed,0);
@@ -47,6 +47,7 @@ export function createScene(container, callbacks = {}) {
   const buildHighlights=new THREE.Group();world.add(buildHighlights);
   const buildGhosts=new THREE.Group();world.add(buildGhosts);
   const buildWireHandles=new THREE.Group(),buildCopper=new THREE.Group();world.add(buildWireHandles,buildCopper);
+  const buildDraftLayer=new THREE.Group();world.add(buildDraftLayer);let buildDraftFrom=null,buildDraftPoint=null,buildDraftKey='';
   let buildSelection=null,buildSelectionKey='',buildConnectionKey='',buildConnectionTargets=[],buildGhostPreview=null,buildWirePending=false;
   const buildWireMaterials=new Map(),buildWireShadows=new Map(),buildWireClones=new Set();let buildWireTransparent=false;
   const DEFAULT_YAW=-.13, MIN_ZOOM=buildMode?.6:.8, MAX_ZOOM=buildMode?3:1.12;
@@ -59,7 +60,7 @@ export function createScene(container, callbacks = {}) {
   const viewDirection=new THREE.Vector3(7,13,10), framePoint=new THREE.Vector3(), frameCenter=new THREE.Vector3(), cameraCenter=new THREE.Vector3();let fittedHeight=0, framingReady=false;
   container.dataset.transitioning='false';container.dataset.lesson='board';
   const rays=new THREE.Raycaster(), mouse=new THREE.Vector2(), temp=new THREE.Vector3();
-  let hover=null, pointerDown=null, pointers=new Map(), pinchDist=0, lastPinch=0,buildDrag=null,buildWireDrag=null;
+  let hover=null, pointerDown=null, pointers=new Map(), pinchDist=0, lastPinch=0,buildDrag=null,buildWireDrag=null,buildWireGesture=null;
   const materials=new Set(), geometries=new Set(), textures=new Set();
   const light=new THREE.DirectionalLight(0xfff9ef,2.5);light.position.set(-5,12,7);light.castShadow=true;
   light.shadow.mapSize.set(2048,2048);Object.assign(light.shadow.camera,{left:-10,right:10,top:10,bottom:-10,near:.1,far:40});
@@ -182,7 +183,8 @@ export function createScene(container, callbacks = {}) {
       c.font='16px monospace';c.fillStyle='#849080';for(let row=0;row<30;row++)if(row===0||(row+1)%5===0)c.fillText(row+1,165,rowY(row)+5);
     });print(4,5.8,t,circuit,[2.9,.12,.05]);
   }
-  function wire(a,b,color){const ar=[a[0],a[1]+.25,a[2]],br=[b[0],b[1]+.6,b[2]];const o=line([a,ar,[(a[0]+b[0])/2,Math.max(a[1],b[1])+.9,(a[2]+b[2])/2],br,b],color,.033,circuit);o.userData.wire=true;return o;}
+  function wire(a,b,color,parent=circuit){const ar=[a[0],a[1]+.25,a[2]],br=[b[0],b[1]+.6,b[2]];const o=line([a,ar,[(a[0]+b[0])/2,Math.max(a[1],b[1])+.9,(a[2]+b[2])/2],br,b],color,.033,parent);o.userData.wire=true;return o;}
+  function dashedBuildWire(a,b,color,parent=circuit){const ghost=wire(a,b,color,parent),geometry=ghost.geometry,index=geometry.getIndex(),segments=geometry.parameters.tubularSegments,step=geometry.parameters.radialSegments*6,dashes=[];for(let segment=0;segment<segments;segment++)if(segment%4<2||segment===segments-1)for(let i=0;i<step;i++)dashes.push(index.getX(segment*step+i));geometry.setIndex(dashes);return ghost;}
   function led(x,z,id='led',color=0xe96249){
     const g=new THREE.Group();g.position.set(x,.13,z);circuit.add(g);
     const isRGB=id==='rgb', radius=isRGB?.32:.23;
@@ -329,18 +331,25 @@ export function createScene(container, callbacks = {}) {
     if(!buildMode)return;const key=preview?JSON.stringify(preview):'';if(key===buildGhostKey)return;buildGhostKey=key;
     buildGhostPreview=preview?{...preview}:null;
     clearCircuit(buildGhosts);buildGhosts.clear();container.dataset.buildGhost=preview?.kind||'';
-    if(!preview)return;
+    if(!preview){refreshBuildWireDraft();return;}
     const savedCircuit=circuit,savedAnim=anim,savedMeshes=meshes;circuit=buildGhosts;anim={};meshes=[];
-    try{if(preview.kind==='wire'){const a=buildEndpointPosition(preview.from),b=buildEndpointPosition(preview.to);if(a&&b){
-      const ghost=wire(a,b,preview.invalid?0xc65e46:0x2a9c89),geometry=ghost.geometry,index=geometry.getIndex(),segments=geometry.parameters.tubularSegments,step=geometry.parameters.radialSegments*6,dashes=[];
-      // Only the preview has gaps; committed jumpers keep their solid geometry.
-      for(let segment=0;segment<segments;segment++)if(segment%4<2||segment===segments-1)for(let i=0;i<step;i++)dashes.push(index.getX(segment*step+i));
-      geometry.setIndex(dashes);
-    }}else buildComponent(preview.kind,preview);}
+    try{if(preview.kind==='wire'){const a=buildEndpointPosition(preview.from),b=buildEndpointPosition(preview.to);if(a&&b)dashedBuildWire(a,b,preview.invalid?0xc65e46:0x2a9c89);}else buildComponent(preview.kind,preview);}
     finally{circuit=savedCircuit;anim=savedAnim;meshes=savedMeshes;}
     const clones=new Map();buildGhosts.traverse(o=>{if(!o.isMesh)return;const original=o.material;let m=clones.get(original);if(!m){m=persistentMaterials.has(original)?original.clone():original;if(m!==original)materials.add(m);m.transparent=true;m.opacity=preview.kind==='wire'?.65:.46;m.depthWrite=false;m.color.lerp(new THREE.Color(preview.invalid?0xcf6c51:0x38ad9a),.85);clones.set(original,m);}o.material=m;o.castShadow=false;o.receiveShadow=false;o.renderOrder=5;o.userData.buildGhost=true;});
+    refreshBuildWireDraft();
     cameraAnimatingUntil=performance.now()+250;
   }
+  function setBuildWireDraft(draft){
+    if(!buildMode)return;const from=draft?.from&&buildEndpointPosition(draft.from)?draft.from:null;if(from===buildDraftFrom)return;buildDraftFrom=from;buildDraftKey='';container.dataset.buildWireDraft=from||'';
+    if(!from){clearCircuit(buildDraftLayer);buildDraftLayer.clear();buildDraftPoint=null;}refreshBuildWireDraft();
+  }
+  function refreshBuildWireDraft(){
+    buildDraftLayer.visible=!!buildDraftFrom&&!running&&!(buildGhostPreview?.kind==='wire'&&buildGhostPreview.to);
+    if(!buildDraftLayer.visible||!buildDraftPoint)return;const a=buildEndpointPosition(buildDraftFrom),b=buildDraftPoint;if(!a)return;const key=JSON.stringify([a,b]);if(key===buildDraftKey)return;buildDraftKey=key;
+    clearCircuit(buildDraftLayer);buildDraftLayer.clear();if(Math.hypot(a[0]-b[0],a[2]-b[2])<.03)return;
+    const wire=dashedBuildWire(a,b,0x38ad9a,buildDraftLayer);wire.material.transparent=true;wire.material.opacity=.65;wire.material.depthWrite=false;wire.castShadow=false;wire.receiveShadow=false;wire.renderOrder=5;wire.userData.buildWireDraft=true;cameraAnimatingUntil=performance.now()+150;
+  }
+  function updateBuildWireDraftPointer(e){if(!buildMode)return;const point=buildPlanePoint(e);if(point)buildDraftPoint=point.toArray();refreshBuildWireDraft();}
   function projectBuildEndpoint(id){
     if(!buildMode)return null;const positions=buildTargetEndpoints(id).map(buildEndpointPosition).filter(Boolean);if(!positions.length)return null;
     const p=new THREE.Vector3();for(const v of positions)p.add(new THREE.Vector3(...v));p.divideScalar(positions.length);world.updateMatrixWorld(true);camera.updateMatrixWorld(true);p.applyMatrix4(world.matrixWorld).project(camera);
@@ -374,9 +383,10 @@ export function createScene(container, callbacks = {}) {
   }
   function setBuildState(next={}){
     if(!buildMode)return;
+    const previousParts=JSON.stringify({project:buildState.project,parts:buildState.parts});
     buildState={project:next.project||'blink',parts:next.parts||{},wires:Array.isArray(next.wires)?next.wires:[],interval:Math.max(100,Math.min(1500,Number(next.interval)||500))};
-    const key=JSON.stringify({project:buildState.project,parts:buildState.parts,wires:buildState.wires});if(key===buildStateKey)return;buildStateKey=key;
-    clearFocus();cancelGesture(true);running=false;transition=null;elapsed=0;
+    const key=JSON.stringify({project:buildState.project,parts:buildState.parts,wires:buildState.wires});if(key===buildStateKey)return;const wireOnly=!!buildStateKey&&previousParts===JSON.stringify({project:buildState.project,parts:buildState.parts});buildStateKey=key;
+    if(!wireOnly)clearFocus();cancelGesture(true);running=false;transition=null;elapsed=0;
     buildSimulation=null;setBuildGhost(null);
     restoreBuildWireMaterials();
     meshes=meshes.filter(m=>!isChildOf(m,circuit));clearCircuit();world.remove(circuit);circuit=new THREE.Group();world.add(circuit);anim={};
@@ -387,12 +397,13 @@ export function createScene(container, callbacks = {}) {
       // Small sockets show that the jumper actually terminates at each contact.
       for(const p of [a,b])box(.065,.13,.065,black,circuit,[p[0],p[1]+.04,p[2]]);
     }
-    labels.forEach(l=>l.el.remove());labels=[];refreshBuildWireMaterials();refreshBuildWireHandles();setBuildConnections(buildConnectionTargets);setBuildHighlight(buildHighlightTargets);captureBounds();resize();cameraAnimatingUntil=performance.now()+450;
+    labels.forEach(l=>l.el.remove());labels=[];refreshBuildWireMaterials();refreshBuildWireHandles();setBuildConnections(buildConnectionTargets);setBuildHighlight(buildHighlightTargets);if(!wireOnly||!frameBounds)captureBounds();resize();cameraAnimatingUntil=performance.now()+450;
   }
   function buildHit(e,h=hit(e)){
     if(h?.object.userData.pin){const o=h.object;return'pin:'+(o.userData.pin==='GND'&&o.userData.pinCluster?.startsWith('-1:')?'GND2':o.userData.pin);}
     return nearestBuildHole(buildPlanePoint(e));
   }
+  function buildEndpointOccupied(id){return buildState.wires.some(w=>w&&(w.from===id||w.to===id))||Object.values(buildState.parts).some(part=>part&&['a','b','c','d','w'].some(key=>part[key]===id));}
   function buildDragEndpoint(e){
     const exact=buildHit(e,hit(e,true));if(exact)return exact;
     const r=renderer.domElement.getBoundingClientRect();let nearest=null,distance=e.pointerType==='touch'?20:10;
@@ -558,6 +569,8 @@ export function createScene(container, callbacks = {}) {
     frameBounds=new THREE.Box3();
     for(const parent of [board,circuit])parent.traverse(o=>{if(!o.isMesh)return;o.geometry.computeBoundingBox();const local=o.geometry.boundingBox.clone();const relative=new THREE.Matrix4().copy(world.matrixWorld).invert().multiply(o.matrixWorld);local.applyMatrix4(relative);frameBounds.union(local);});
     frameBounds.expandByScalar(.3);
+    // Reserve jumper height up front so adding a wire never reframes the workbench.
+    if(buildMode)frameBounds.max.y=Math.max(frameBounds.max.y,1.6);
     // Interactive obstacles may move after the static layout was captured.
     if(lesson==='distance')frameBounds.max.z=Math.max(frameBounds.max.z,3.05);
   }
@@ -735,20 +748,30 @@ export function createScene(container, callbacks = {}) {
     const step={blink:25,potentiometer:25,rgb:100/12,distance:25,sound:12.5,motor:25,temperature:12.5,servo:25,stepper:12.5,plant:25}[g.action];
     if(step!==undefined)emit('value',{value:g.action==='plant'?Math.min(100,value+step):(value+step>100.01?0:value+step),part:g.part});
   }
-  function hoverAt(e){const h=hit(e),part=h?.object.userData.part||null;hover=part;if(buildMode){const handle=buildWireHandleHit(e),ghost=handle?null:buildGhostHit();if(ghost){renderer.domElement.style.cursor=ghost.invalid?'not-allowed':'copy';return;}const endpoint=handle?.anchor||buildHit(e,buildTool==='wire'?hit(e,true):h),a=interaction(h,e);renderer.domElement.style.cursor=handle?'grab':a?.kind==='drag'?'ew-resize':buildTool==='delete'&&(h?.object.userData.buildPart||h?.object.userData.buildWire)?'not-allowed':buildTool==='select'&&!running&&h?.object.userData.buildPart?'move':endpoint||h?.object.userData.buildPart||h?.object.userData.buildWire?'pointer':'grab';callbacks.onBuildHover?.(endpoint,{x:e.clientX,y:e.clientY});return;}const a=interaction(h,e);renderer.domElement.style.cursor=a?.kind==='drag'?'ew-resize':part?'pointer':'grab';callbacks.onHover?.(part,{x:e.clientX,y:e.clientY});}
+  function hoverAt(e){const h=hit(e),part=h?.object.userData.part||null;hover=part;if(buildMode){updateBuildWireDraftPointer(e);const handle=buildWireHandleHit(e),ghost=handle?null:buildGhostHit();if(ghost){renderer.domElement.style.cursor=ghost.invalid?'not-allowed':'copy';return;}const endpoint=handle?.anchor||buildHit(e,buildTool==='wire'||h?.object.userData.buildWire?hit(e,true):h),a=interaction(h,e);renderer.domElement.style.cursor=handle?'grab':a?.kind==='drag'?'ew-resize':buildTool==='delete'&&(h?.object.userData.buildPart||h?.object.userData.buildWire)?'not-allowed':buildTool==='select'&&!running&&h?.object.userData.buildPart?'move':endpoint||h?.object.userData.buildPart||h?.object.userData.buildWire?'pointer':'grab';callbacks.onBuildHover?.(endpoint,{x:e.clientX,y:e.clientY});return;}const a=interaction(h,e);renderer.domElement.style.cursor=a?.kind==='drag'?'ew-resize':part?'pointer':'grab';callbacks.onHover?.(part,{x:e.clientX,y:e.clientY});}
   function cancelBuildDrag(){const old=buildDrag;buildDrag=null;if(old?.started)callbacks.onBuildDrag?.({kind:old.kind,phase:'cancel',anchor:null});}
   function cancelBuildWireDrag(){const old=buildWireDrag;buildWireDrag=null;if(old?.started)callbacks.onBuildWireDrag?.({id:old.id,end:old.end,phase:'cancel',anchor:null});}
-  function buildDragLocksView(){return buildMode&&pointers.size===1&&!!(buildDrag||buildWireDrag);}
-  function cancelGesture(silent=false){cancelBuildDrag();cancelBuildWireDrag();releaseAction(silent===true);if(silent===true)pressed=false;pointerDown=null;pointers.clear();pinchDist=0;callbacks.onHover?.(null,{x:0,y:0});}
+  function cancelBuildWireGesture(emit=true){const old=buildWireGesture;buildWireGesture=null;if(old&&emit)callbacks.onBuildWireGesture?.({phase:'cancel',anchor:null,dragged:old.dragged,continued:old.continued});}
+  function buildDragLocksView(){return buildMode&&pointers.size===1&&!!(buildDrag||buildWireDrag||buildWireGesture);}
+  function cancelGesture(silent=false){cancelBuildDrag();cancelBuildWireDrag();cancelBuildWireGesture(silent!==true);releaseAction(silent===true);if(silent===true)pressed=false;pointerDown=null;pointers.clear();pinchDist=0;callbacks.onHover?.(null,{x:0,y:0});}
+  function cancelBuildConnection(e){
+    if(!buildMode)return;const active=buildWireGesture,hasDraft=!!(active||buildWirePending||buildDraftFrom),editing=!!(buildDrag||buildWireDrag);if(!hasDraft&&!editing)return;
+    e?.preventDefault();e?.stopPropagation();cancelGesture(true);if(hasDraft)callbacks.onBuildWireGesture?.({phase:'cancel',anchor:null,dragged:!!active?.dragged,continued:!!active?.continued});
+  }
+  function cancelBuildGesture(){if(!buildMode)return;buildWireGesture=null;buildWireDrag=null;buildDrag=null;releaseAction(true);pointerDown=null;pointers.clear();pinchDist=0;setBuildWireDraft(null);}
+  function contextMenu(e){if(!buildMode)return;e.preventDefault();cancelBuildConnection(e);}
   function down(e){
     if((e.button!==undefined&&e.button!==0)||transition)return;
     pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});try{renderer.domElement.setPointerCapture(e.pointerId);}catch{}
-    if(pointers.size>1){if(!buildMode)clearFocus();cancelBuildDrag();cancelBuildWireDrag();releaseAction();pointerDown=null;const[a,b]=[...pointers.values()];pinchDist=Math.hypot(a.x-b.x,a.y-b.y);lastPinch=zoomLevel;return;}
+    if(pointers.size>1){if(!buildMode)clearFocus();const pair=[...pointers.entries()];cancelBuildDrag();cancelBuildWireDrag();cancelBuildWireGesture();pointers=new Map(pair);releaseAction();pointerDown=null;const[a,b]=[...pointers.values()];pinchDist=Math.hypot(a.x-b.x,a.y-b.y);lastPinch=zoomLevel;return;}
     const h=hit(e),wireEnd=buildWireHandleHit(e),ghost=wireEnd?null:buildGhostHit(),a=wireEnd||ghost?null:interaction(h,e);
     pointerDown={id:e.pointerId,x:e.clientX,y:e.clientY,startX:e.clientX,startY:e.clientY,moved:false,hit:h,ghost,inspect:!!(e.shiftKey||e.altKey)};
     gesture=a?{...a,startValue:value,startX:e.clientX,startY:e.clientY}:null;
     if(wireEnd)buildWireDrag={...wireEnd,started:false,target:wireEnd.anchor};
     else if(!ghost&&buildMode&&!running&&buildTool==='select'&&h?.object.userData.buildPart){const kind=h.object.userData.buildPart,anchor=buildState.parts[kind]?.a,position=buildEndpointPosition(anchor),point=buildPlanePoint(e);if(position&&point)buildDrag={kind,anchor,position:new THREE.Vector3(...position),point,started:false};}
+    else if(!ghost&&buildMode&&!running&&['select','wire'].includes(buildTool)&&typeof callbacks.onBuildWireGesture==='function'){
+      const anchor=buildHit(e,hit(e,true));if(anchor&&(buildTool==='wire'||!h?.object.userData.buildWire||!buildEndpointOccupied(anchor))){buildWireGesture={start:anchor,continued:buildWirePending,dragged:false,target:anchor};updateBuildWireDraftPointer(e);callbacks.onBuildWireGesture({phase:'start',anchor,dragged:false,continued:buildWireGesture.continued});}
+    }
     if(gesture)beginAction(gesture,e);
     renderer.domElement.style.cursor=gesture?.kind==='drag'?'ew-resize':'grabbing';
   }
@@ -759,18 +782,20 @@ export function createScene(container, callbacks = {}) {
     if(!pointerDown||pointerDown.id!==e.pointerId)return;
     const dx=e.clientX-pointerDown.x,totalX=e.clientX-pointerDown.startX,totalY=e.clientY-pointerDown.startY;
     if(Math.hypot(totalX,totalY)>5)pointerDown.moved=true;
+    if(buildWireGesture){const session=buildWireGesture;session.dragged=pointerDown.moved;const anchor=buildDragEndpoint(e);session.target=anchor;updateBuildWireDraftPointer(e);callbacks.onBuildWireGesture?.({phase:'move',anchor,dragged:session.dragged,continued:session.continued});renderer.domElement.style.cursor='crosshair';if(pointerDown){pointerDown.x=e.clientX;pointerDown.y=e.clientY;}return;}
     if(buildWireDrag&&pointerDown.moved){const drag=buildWireDrag;if(!drag.started){drag.started=true;callbacks.onBuildWireDrag?.({id:drag.id,end:drag.end,phase:'start',anchor:drag.anchor});}const anchor=buildDragEndpoint(e);drag.target=anchor;callbacks.onBuildWireDrag?.({id:drag.id,end:drag.end,phase:'move',anchor});renderer.domElement.style.cursor='grabbing';pointerDown.x=e.clientX;pointerDown.y=e.clientY;return;}
     if(buildDrag&&pointerDown.moved){const drag=buildDrag;if(!drag.started){drag.started=true;callbacks.onBuildDrag?.({kind:drag.kind,phase:'start',anchor:drag.anchor});}const point=buildPlanePoint(e),anchor=point?nearestBuildHole(point.sub(drag.point).add(drag.position),true):null;drag.target=anchor;callbacks.onBuildDrag?.({kind:drag.kind,phase:'move',anchor});renderer.domElement.style.cursor='move';pointerDown.x=e.clientX;pointerDown.y=e.clientY;return;}
     if(gesture?.kind==='drag'&&pointerDown.moved){emit('value',{value:gesture.startValue+totalX/Math.max(140,viewWidth*.35)*100,part:gesture.part});}
     else if(gesture?.action==='force'){emit('value',{value:e.pointerType==='pen'&&e.pressure>0?e.pressure*100:80-totalY*.7,part:gesture.part});}
     else if(gesture?.action==='piano'){const h=hit(e),note=h?.object.userData.note;if(Number.isInteger(note)&&note!==gesture.note){gesture.note=note;value=note/7*100;emit('press',{pressed:true,value,part:gesture.part});}}
     else if(!gesture&&pointerDown.moved){clearFocus();targetRotation=THREE.MathUtils.clamp(targetRotation+dx*.006,DEFAULT_YAW-Math.PI*.85,DEFAULT_YAW+Math.PI*.85);}
-    pointerDown.x=e.clientX;pointerDown.y=e.clientY;callbacks.onHover?.(null,{x:e.clientX,y:e.clientY});
+    pointerDown.x=e.clientX;pointerDown.y=e.clientY;if(buildMode&&buildDraftFrom)updateBuildWireDraftPointer(e);callbacks.onHover?.(null,{x:e.clientX,y:e.clientY});
   }
   function up(e){
     const had=pointers.has(e.pointerId);pointers.delete(e.pointerId);
     if(!had)return;
     if(pointerDown?.id===e.pointerId){
+      if(buildWireGesture){const session=buildWireGesture,anchor=e.type==='pointerup'?buildDragEndpoint(e):null;buildWireGesture=null;pointerDown=null;callbacks.onBuildWireGesture?.({phase:e.type==='pointerup'?'end':'cancel',anchor,dragged:session.dragged,continued:session.continued});renderer.domElement.style.cursor='grab';return;}
       if(buildWireDrag){const drag=buildWireDrag;buildWireDrag=null;pointerDown=null;if(drag.started)callbacks.onBuildWireDrag?.({id:drag.id,end:drag.end,phase:e.type==='pointerup'?'end':'cancel',anchor:drag.target||null});renderer.domElement.style.cursor='grab';return;}
       if(buildDrag?.started){const drag=buildDrag;buildDrag=null;pointerDown=null;callbacks.onBuildDrag?.({kind:drag.kind,phase:e.type==='pointerup'?'end':'cancel',anchor:drag.target||null});renderer.domElement.style.cursor='grab';return;}
       buildDrag=null;
@@ -793,8 +818,8 @@ export function createScene(container, callbacks = {}) {
   function changeZoom(next,exitFocus=!buildMode){if(exitFocus)clearFocus();const numeric=Number(next);if(!Number.isFinite(numeric))return;const nextZoom=THREE.MathUtils.clamp(numeric,MIN_ZOOM,MAX_ZOOM);if(Math.abs(zoomLevel-nextZoom)<.000001)return;zoomLevel=nextZoom;cameraAnimatingUntil=performance.now()+400;notifyBuildZoom();frameCamera();}
   function wheel(e){e.preventDefault();if(!buildMode)clearFocus();const delta=e.deltaY*(e.deltaMode===1?16:e.deltaMode===2?viewHeight:1);changeZoom(zoomLevel*Math.exp(-delta*(buildMode?.0012:.0007)),false);}
   function turn(d){clearFocus();targetRotation=THREE.MathUtils.clamp(targetRotation+d,DEFAULT_YAW-Math.PI*.85,DEFAULT_YAW+Math.PI*.85);}
-  function key(e){if(['ArrowLeft','ArrowRight','+','-','0'].includes(e.key)){e.preventDefault();if(!buildMode)clearFocus();if(e.key==='ArrowLeft')turn(-.15);if(e.key==='ArrowRight')turn(.15);if(e.key==='+')changeZoom(zoomLevel+(buildMode?.15:.05),false);if(e.key==='-')changeZoom(zoomLevel-(buildMode?.15:.05),false);if(e.key==='0')reset();}}
-  const listeners={pointerdown:down,pointermove:move,pointerup:up,pointercancel:up,lostpointercapture:lost,pointerleave:leave,wheel,keyDown:key};
+  function key(e){if(buildMode&&e.key==='Escape'){cancelBuildConnection(e);return;}if(['ArrowLeft','ArrowRight','+','-','0'].includes(e.key)){e.preventDefault();if(!buildMode)clearFocus();if(e.key==='ArrowLeft')turn(-.15);if(e.key==='ArrowRight')turn(.15);if(e.key==='+')changeZoom(zoomLevel+(buildMode?.15:.05),false);if(e.key==='-')changeZoom(zoomLevel-(buildMode?.15:.05),false);if(e.key==='0')reset();}}
+  const listeners={pointerdown:down,pointermove:move,pointerup:up,pointercancel:up,lostpointercapture:lost,pointerleave:leave,contextmenu:contextMenu,wheel,keyDown:key};
   for(const[name,fn]of Object.entries(listeners))renderer.domElement.addEventListener(name==='keyDown'?'keydown':name,fn,name==='wheel'?{passive:false}:undefined);
   window.addEventListener('blur',cancelGesture);
   function assemble(id,animate=true){
@@ -865,11 +890,11 @@ export function createScene(container, callbacks = {}) {
   externalSetup('board');resize();if(buildMode)setBuildState(buildState);frame=requestAnimationFrame(tick);callbacks.onReady?.();
   return {
     setLesson:switchLesson,
-    setBuildState,setBuildHighlight,focusBuildTargets,setBuildGhost,setBuildSelection,setBuildConnections,projectBuildEndpoint,setBuildInputs,setBuildSimulation,
+    setBuildState,setBuildHighlight,focusBuildTargets,setBuildGhost,setBuildSelection,setBuildConnections,setBuildWireDraft,cancelBuildGesture,projectBuildEndpoint,setBuildInputs,setBuildSimulation,
     setBuildWirePending(v){if(buildMode)buildWirePending=!!v;},
     setBuildTool(tool){if(!buildMode||tool===buildTool)return;buildTool=['select','wire','delete','led','resistor','button','potentiometer'].includes(tool)?tool:'select';container.dataset.buildSceneTool=buildTool;cancelBuildDrag();cancelBuildWireDrag();refreshBuildWireMaterials();refreshBuildWireHandles();},
     setBuildZoom(v){if(buildMode)changeZoom(v,false);},getBuildZoom(){return zoomLevel;},
-    setBuildRunning(v){if(!buildMode||running===!!v)return;running=!!v;elapsed=0;if(!running)cancelGesture(true);else{cancelBuildWireDrag();setBuildGhost(null);}refreshBuildWireMaterials();refreshBuildWireHandles();container.dataset.buildRunning=String(running);},
+    setBuildRunning(v){if(!buildMode||running===!!v)return;running=!!v;elapsed=0;if(!running)cancelGesture(true);else{cancelBuildWireDrag();cancelBuildWireGesture(false);setBuildGhost(null);setBuildWireDraft(null);}refreshBuildWireMaterials();refreshBuildWireHandles();refreshBuildWireDraft();container.dataset.buildRunning=String(running);},
     setRunning(v){running=!!v;if(!running)cancelGesture(true);elapsed=0;},setValue(v){value=Number(v)||0;},setPressed(v){pressed=!!v;},
     setLabels(v){labelsVisible=!!v;},setFlow(v){flow=buildMode?false:!!v;},focus,clearFocus,reset,
     rotate:turn,zoom(d){if(!buildMode)clearFocus();changeZoom(zoomLevel+d,false);},

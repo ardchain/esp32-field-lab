@@ -21,6 +21,11 @@ export const BUILD_PROJECTS=[
     control:{type:'range',label:'Dial position',min:0,max:100,step:1,value:50},
     code:lessons.find(l=>l.id==='potentiometer').code},
 ];
+for (const project of BUILD_PROJECTS) {
+  const index=lessons.findIndex(lesson=>lesson.id===project.id);
+  project.lessonTitle=lessons[index].title;
+  project.lessonNumber=String(index+1).padStart(2,'0');
+}
 export function getBuildProject(id){return BUILD_PROJECTS.find(p=>p.id===id)||BUILD_PROJECTS[0];}
 export function buildSketch(state){
   const project=getBuildProject(state?.project);
