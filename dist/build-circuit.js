@@ -161,6 +161,72 @@ export function wireIssue(state, from, to) {
   return null;
 }
 
+// A clicked component lead may already occupy its hole. Offer another physical
+// contact on that exact conducting net; never cross a passive component or the
+// normally open side of a button. The stored circuit still has one lead per hole.
+function wireResolutionContext(state) {
+  const links=new Map();
+  const link=(from,to)=>{
+    from=canonicalEndpoint(from);to=canonicalEndpoint(to);
+    const a=netOf(from),b=netOf(to);
+    if(!links.has(a))links.set(a,[]);if(!links.has(b))links.set(b,[]);
+    links.get(a).push({net:b,anchor:to});links.get(b).push({net:a,anchor:from});
+  };
+  for(const wire of state.wires)link(wire.from,wire.to);
+  const button=state.parts.button;
+  if(button){link(button.a,button.b);link(button.c,button.d);}
+  return {occupied:occupiedEndpoints(state),uf:buildNets(state),links};
+}
+
+function resolveInContext(context,requested,exclude=[]) {
+  const blocked=new Set((Array.isArray(exclude)?exclude:[]).map(canonicalEndpoint).filter(Boolean));
+  const available=id=>!context.occupied.has(id)&&!blocked.has(id);
+  if(available(requested))return {ok:true,requested,endpoint:requested,redirected:false};
+  const origin=parseEndpoint(requested),target=context.uf.find(requested);
+  const routes=new Map([[origin.net,{hops:0,anchors:[requested]}]]),queue=[origin.net];
+  for(let i=0;i<queue.length;i++){
+    const current=routes.get(queue[i]);
+    for(const edge of context.links.get(queue[i])||[]){
+      const known=routes.get(edge.net),hops=current.hops+1;
+      if(!known){routes.set(edge.net,{hops,anchors:[edge.anchor]});queue.push(edge.net);}
+      else if(known.hops===hops)known.anchors.push(edge.anchor);
+    }
+  }
+  const distance=(a,b)=>a.kind==='hole'&&b.kind==='hole'?Math.abs(COLUMNS.indexOf(a.column)-COLUMNS.indexOf(b.column)):
+    a.kind==='rail'&&b.kind==='rail'?Math.abs(a.index-b.index):0;
+  const candidates=endpoints.filter(id=>available(id)&&context.uf.find(id)===target).map(id=>{
+    const point=parseEndpoint(id),route=routes.get(point.net);
+    // First use the clicked strip/rail, then a nearby hole reached by a jumper
+    // or a permanent button pair. Another board pin is the final alternative.
+    const tier=point.kind==='pin'?2:point.net===origin.net?0:1;
+    return {id,rank:[tier,route?.hops??Infinity,route?Math.min(...route.anchors.map(anchor=>distance(point,parseEndpoint(anchor)))):Infinity]};
+  });
+  candidates.sort((a,b)=>a.rank[0]-b.rank[0]||a.rank[1]-b.rank[1]||a.rank[2]-b.rank[2]);
+  if(!candidates.length)return diagnostic('no_free_contact','No free contact on this connection',
+    `Every contact electrically joined to ${endpointLabel(requested)} is occupied or reserved. Free a contact or choose another connection.`,[requested]);
+  return {ok:true,requested,endpoint:candidates[0].id,redirected:true};
+}
+
+export function resolveWireEndpoint(state,id,{exclude=[]}={}) {
+  const requested=canonicalEndpoint(id);
+  if(!requested)return diagnostic('invalid_endpoint','Choose a contact','Select a board pin, breadboard hole or rail contact.');
+  const bad=validInput(state);if(bad)return bad;
+  return resolveInContext(wireResolutionContext(state),requested,exclude);
+}
+
+export function resolveWireConnection(state,requestedFrom,requestedTo) {
+  const a=canonicalEndpoint(requestedFrom),b=canonicalEndpoint(requestedTo);
+  if(!a||!b)return diagnostic('invalid_endpoint','Choose two contacts','Select board pins, breadboard holes or rail contacts.');
+  const bad=validInput(state);if(bad)return bad;
+  const context=wireResolutionContext(state);
+  if(context.uf.find(a)===context.uf.find(b))return {alreadyConnected:true,targets:[...new Set([a,b])]};
+  const first=resolveInContext(context,a);if(!first.ok)return first;
+  const second=resolveInContext(context,b,[first.endpoint]);if(!second.ok)return second;
+  const issue=wireIssue(state,first.endpoint,second.endpoint);if(issue)return issue;
+  return {ok:true,from:first.endpoint,to:second.endpoint,
+    redirected:[first,second].filter(result=>result.redirected).map(({requested,endpoint})=>({requested,endpoint}))};
+}
+
 // Restoring storage never trusts arbitrary object keys, HTML, colors or IDs.
 // Invalid parts/wires are discarded; validation below never silently repairs its input.
 export function normalizeState(raw) {

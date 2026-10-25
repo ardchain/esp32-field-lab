@@ -1,5 +1,5 @@
 import { createScene } from './scene.js';
-import { initialState, normalizeState, parseEndpoint, netOf, endpointLabel, allEndpoints, placement, placementIssue, wireIssue, validateCircuit, partTerminals, connectionPlan, simulationState } from './build-circuit.js';
+import { initialState, normalizeState, parseEndpoint, netOf, endpointLabel, allEndpoints, placement, placementIssue, wireIssue, validateCircuit, partTerminals, connectionPlan, simulationState, resolveWireEndpoint, resolveWireConnection } from './build-circuit.js';
 import { BUILD_PROJECTS, getBuildProject, buildSketch } from './build-projects.js';
 
 const KEY='field-lab-build-blink-v1', COMPLETE='field-lab-build-completed-v1';
@@ -17,6 +17,8 @@ export function mountBuild(container,{projectId='blink',onProjectChange=()=>{},o
  try{const raw=localStorage.getItem(draftKey);if(raw){const saved=normalizeState(JSON.parse(raw));if(saved.project===project.id||(!saved.project&&project.id==='blink')){state=saved;stored=true;}}}catch{}
  let active=true, mode='select', orientation=0, flipped=false, first=null, selected=null, highlights=[], check=null, running=false, view='top', scene=null;
  let sceneState='', sceneHighlights='', sceneRunning=null, sceneGhost='', preview=null, hintGhost=null, callout=null;
+ let firstRequested=null,guidedWire=null,wireStatus='',wireHover=null,wireCacheState=null;
+ const wireCache=new Map();
  let undo=[], animation=0, startTime=0, lastLED=null, wireCounter=Date.now(), message=stored?'Your saved circuit is ready to continue.':'Place the LED and resistor, then connect them.', tone='neutral';
  let pressed=false,dial=50,simulation=null,simulationSignature='';
  const full={x:14,y:39,w:746,h:672};
@@ -73,7 +75,7 @@ export function mountBuild(container,{projectId='blink',onProjectChange=()=>{},o
   renderGhost();
  }
  function setViewport(){const svg=$('#build-viewport');svg.setAttribute('viewBox',`${viewport.x} ${viewport.y} ${viewport.w} ${viewport.h}`);updateZoom();positionCallout();}
- function activeGhost(){return preview||hintGhost;}
+ function activeGhost(){return preview||(mode==='wire'&&first&&wireHover?null:hintGhost);}
  function renderGhost(){
   const layer=$('#build-ghost-layer'),g=activeGhost();if(!layer)return;
   if(!g){layer.innerHTML='';return;}
@@ -92,12 +94,17 @@ export function mountBuild(container,{projectId='blink',onProjectChange=()=>{},o
   label.hidden=false;line.style.display='block';const w=label.offsetWidth,h=label.offsetHeight,left=Math.max(8,Math.min(box.width-w-8,p.x-w/2)),top=Math.max(8,Math.min(box.height-h-8,p.y-h-28));
   label.style.left=left+'px';label.style.top=top+'px';line.setAttribute('viewBox',`0 0 ${box.width} ${box.height}`);line.querySelector('path').setAttribute('d',`M${left+w/2} ${top+h}L${p.x} ${p.y}`);line.querySelector('circle').setAttribute('cx',p.x);line.querySelector('circle').setAttribute('cy',p.y);
  }
- function clearPreview({hint=false}={}){preview=null;if(hint){hintGhost=null;showCallout('',null);$('#build-hint-copy').hidden=true;}renderGhost();syncScene();}
+ function clearPreview({hint=false}={}){preview=null;wireHover=null;if(hint){hintGhost=null;guidedWire=null;showCallout('',null);$('#build-hint-copy').hidden=true;}renderGhost();syncScene();}
+ function wireIntent(from,to){if(wireCacheState!==state){wireCache.clear();wireCacheState=state;}const key=from+'|'+to;if(!wireCache.has(key))wireCache.set(key,resolveWireConnection(state,from,to));return wireCache.get(key);}
+ function wireRelocation(list){return list?.length?list.map(p=>`${name(p.requested)} is occupied; using ${name(p.endpoint)} on the same connection.`).join(' '):'';}
+ function cancelWire(notice='Wire cancelled. Choose a new start contact.'){first=null;firstRequested=null;wireStatus='';selected=null;clearPreview({hint:true});highlights=[];message=notice;tone='neutral';render();}
  function previewContact(id){
+  wireHover=mode==='wire'&&first?id:null;
   const kind=selected?.kind||(project.parts.includes(mode)?mode:null);
   if(kind&&id){const p=placement(kind,id,orientation,kind==='led'&&flipped);preview=p?{kind,...p,invalid:!!placementIssue(state,kind,p)}:null;}
-  else if(mode==='wire'&&first&&id&&id!==first)preview={kind:'wire',from:first,to:id,invalid:!!wireIssue(state,first,id)};
+  else if(mode==='wire'&&first&&id&&id!==first&&id!==firstRequested){const result=wireIntent(firstRequested||first,id);if(result.alreadyConnected){preview=null;showCallout('Already connected · click to finish',id);}else if(result.ok){preview={kind:'wire',from:result.from,to:result.to};showCallout(result.redirected?.length?`Preview → ${name(result.to)} · same connection`:'Preview · click to connect',result.to);}else{preview=null;showCallout(result.title||'Choose another destination',result.targets?.[0]||id);}}
   else preview=null;
+  if(mode==='wire'&&first&&!id){if(guidedWire&&hintGhost?.kind==='wire')showCallout(`2 / 2 · Connect to ${name(hintGhost.to)}`,hintGhost.to);else showCallout(`Start: ${name(first)} · choose the other end`,first);}
   renderGhost();syncScene();
  }
  function focusTargets(targets){
@@ -120,21 +127,22 @@ export function mountBuild(container,{projectId='blink',onProjectChange=()=>{},o
   scene.setBuildTool?.(mode);
  }
  function setMessage(text,type='neutral',targets=[]){message=text;tone=type;highlights=targets;renderFeedback();syncScene();renderSVG();}
- function renderFeedback(){$('#build-feedback').textContent=message;$('#build-feedback').dataset.tone=tone;$('#build-inline-feedback').textContent=message;$('#build-inline-feedback').hidden=tone!=='error';}
- function instruction(){if(mode==='delete')return'Tap a component or wire to delete it. Undo restores it.';if(selected?.wire)return'Wire selected. Press Delete or use Remove.';if(selected?.kind)return`Drag to move, or tap a new hole${selected.kind==='led'?' for the anode (+)':''}.`;if(mode==='led')return flipped?'Place the short leg (−) on a hole.':'Place the long leg (+) on a hole.';if(mode==='resistor')return'Place the first resistor lead on a hole.';if(mode==='select')return'Drag a part to move it. Tap a part or wire to select.';return first?`${name(first)} → choose the other contact.`:'Tap two contacts to connect a wire.';}
+ function renderFeedback(){$('#build-feedback').textContent=message;$('#build-feedback').dataset.tone=tone;$('#build-inline-feedback').textContent=message;$('#build-inline-feedback').dataset.tone=tone==='error'?'error':wireStatus?'success':'neutral';$('#build-inline-feedback').hidden=tone!=='error'&&!(mode==='wire'&&wireStatus);}
+ function instruction(){if(mode==='delete')return'Tap a component or wire to delete it. Undo restores it.';if(selected?.wire)return'Wire selected. Press Delete or use Remove.';if(selected?.kind)return`Drag to move, or tap a new hole${selected.kind==='led'?' for the anode (+)':''}.`;if(mode==='led')return flipped?'Place the short leg (−) on a hole.':'Place the long leg (+) on a hole.';if(mode==='resistor')return'Place the first resistor lead on a hole.';if(mode==='select')return'Drag a part to move it. Tap a part or wire to select.';return first?`2 / 2 · ${name(first)} → choose the other end.`:`${wireStatus?'Connected. ':''}1 / 2 · Choose ${wireStatus?'the next':'a'} start contact.`;}
  function sketch(){return buildSketch(state);}
  function render(){
   $('#build-instruction').textContent=instruction();
   $$('button[data-build-tool]').forEach(b=>{const k=b.dataset.buildTool;b.setAttribute('aria-pressed',String(mode===k));b.classList.toggle('is-active',mode===k);b.classList.toggle('is-placed',!!state.parts[k]);b.querySelector('span').textContent=({select:'Select / Move',wire:'Wire',delete:'Delete',resistor:'330 Ω',button:'Button',potentiometer:'10 kΩ dial'})[k]||project.labels[k]||k;});
   $('#build-rotate').hidden=!project.parts.includes(mode)&&!selected?.kind;$('#build-flip').hidden=mode!=='led'&&selected?.kind!=='led';$('#build-remove').hidden=!selected;$('#build-cancel').hidden=!first&&!selected&&!project.parts.includes(mode);
+  $('#build-cancel').textContent=mode==='wire'?'Cancel wire':'Cancel';container.dataset.wireStage=mode==='wire'?(first?'destination':'start'):'';
   $('#build-run').disabled=!check?.ok;$('#build-run').textContent=running?'Stop':'Run';$('#build-run').setAttribute('aria-pressed',String(running));$('#build-undo').disabled=!undo.length;
   $('#build-wire-count').textContent=String(state.wires.length);$('#build-wire-list').innerHTML=state.wires.length?state.wires.map(w=>`<div class="build-wire-row"><button data-build-wire-select="${esc(w.id)}"><i style="background:${esc(w.color)}"></i>${esc(name(w.from))} → ${esc(name(w.to))}</button><button data-build-wire-remove="${esc(w.id)}" aria-label="Remove wire from ${esc(name(w.from))} to ${esc(name(w.to))}">×</button></div>`).join(''):'<p class="build-small">No wires yet.</p>';
   if($('#build-hold'))$('#build-hold').disabled=!running;if($('#build-dial'))$('#build-dial').disabled=!running;
   $('#build-interval').value=String(state.interval);$('#build-interval-value').textContent=state.interval+' ms';$('#build-code').textContent=sketch();renderFeedback();renderSVG();syncScene();updateSimulation();container.dataset.running=String(running);container.dataset.checked=String(!!check?.ok);container.dataset.tool=mode;
  }
  function stop(){running=false;pressed=false;if(sceneRunning!==false)scene?.setBuildRunning(false);sceneRunning=false;lastLED=null;simulationSignature='';scene?.setBuildInputs?.({pressed:false,value:dial});}
- function edit(next,notice='Circuit changed. Check it before running.'){
-  stop();undo.push(copy(state));if(undo.length>50)undo.shift();state=normalizeState(next);check=null;highlights=[];preview=null;hintGhost=null;showCallout('',null);$('#build-hint-copy').hidden=true;first=null;message=notice;tone='neutral';save();render();
+ function edit(next,notice='Circuit changed. Check it before running.',wireConnected=false){
+  stop();undo.push(copy(state));if(undo.length>50)undo.shift();state=normalizeState(next);check=null;highlights=[];preview=null;hintGhost=null;guidedWire=null;wireStatus=wireConnected?'connected':'';showCallout('',null);$('#build-hint-copy').hidden=true;first=null;firstRequested=null;message=notice;tone='neutral';save();render();
  }
  function issue(d){if(d)setMessage(d.message||d.title,'error',d.targets||[]);return !!d;}
  function selectContact(id){if(!parseEndpoint(id))return;
@@ -142,29 +150,43 @@ export function mountBuild(container,{projectId='blink',onProjectChange=()=>{},o
   const kind=selected?.kind||(project.parts.includes(mode)?mode:null);
   if(kind){const p=placement(kind,id,orientation,kind==='led'&&flipped);if(!p){setMessage('Choose a breadboard hole with room for every lead.','error',[id]);return;}if(issue(placementIssue(state,kind,p)))return;commitPart(kind,p);return;}
   if(mode!=='wire'){highlights=[id];render();return;}
-  selected=null;if(first===id){first=null;clearPreview();render();return;}if(!first){first=id;highlights=[id];render();return;}if(issue(wireIssue(state,first,id)))return;const next=copy(state);next.wires.push({id:'w'+(++wireCounter),from:first,to:id,color:$('#build-color').value});edit(next,'Wire connected.');
+  selected=null;if(first&&(first===id||firstRequested===id)){cancelWire();return;}if(!first){startWire(id);return;}finishWire(id);
+ }
+ function startWire(id){
+  const suggestion=guidedWire||(hintGhost?.kind==='wire'?{from:hintGhost.from,to:hintGhost.to}:null),result=resolveWireEndpoint(state,id);clearPreview({hint:true});wireStatus='';first=null;firstRequested=null;
+  if(!result.ok){message=`${result.message} Choose another start contact.`;tone='error';highlights=result.targets||[id];render();showCallout('Choose another start contact',id);return;}
+  first=result.endpoint;firstRequested=result.requested;highlights=[first];tone='neutral';message=result.redirected?wireRelocation([result]):`Start: ${name(first)}. Choose the other end.`;
+  let destination=null;if(suggestion){if(wireIntent(id,suggestion.from).alreadyConnected)destination=suggestion.to;else if(wireIntent(id,suggestion.to).alreadyConnected)destination=suggestion.from;}
+  if(destination){const pair=wireIntent(id,destination);if(pair.ok){guidedWire=suggestion;hintGhost={kind:'wire',from:pair.from,to:pair.to};highlights=[first,pair.to];}}
+  render();showCallout(hintGhost?`2 / 2 · Connect to ${name(hintGhost.to)}`:result.redirected?`Start: ${name(first)} · same connection as ${name(id)}`:`Start: ${name(first)} · choose the other end`,hintGhost?.to||first);
+ }
+ function finishWire(id){
+  const result=wireIntent(firstRequested||first,id),resumeGuide=!!guidedWire;
+  if(result.alreadyConnected){cancelWire('Already connected. Choose a new start contact.');wireStatus='connected';highlights=result.targets||[];render();showCallout('Already connected · no extra wire needed',id);if(resumeGuide)hint({afterConnection:true});return;}
+  if(!result.ok){preview=null;hintGhost=null;guidedWire=null;$('#build-hint-copy').hidden=true;const source=resolveWireEndpoint(state,firstRequested||first);if(!source.ok){first=null;firstRequested=null;}else first=source.endpoint;message=`${result.message} ${first?'Your start is still selected; choose another end.':'Choose a new start contact.'}`;tone='error';wireStatus='';highlights=[...(first?[first]:[]),...(result.targets||[])];render();showCallout(first?'Choose another destination':'Choose a new start',result.targets?.[0]||id);return;}
+  const next=copy(state);next.wires.push({id:'w'+(++wireCounter),from:result.from,to:result.to,color:$('#build-color').value});edit(next,`Connected: ${name(result.from)} → ${name(result.to)}.${result.redirected?.length?' '+wireRelocation(result.redirected):''}`,true);if(resumeGuide)hint({afterConnection:true});
  }
  function commitPart(kind,p){const moved=!!state.parts[kind],next=copy(state);next.parts[kind]=p;selected={kind};mode='select';edit(next,`${project.labels[kind]} ${moved?'moved':'placed'}. Choose Wire to connect it.`);partPose(kind);}
  function partPose(kind){const p=state.parts[kind],a=parseEndpoint(p?.a),b=parseEndpoint(p?.b);orientation=!a||!b?0:b.row>a.row?0:b.row<a.row?180:b.column>a.column?90:270;flipped=false;}
  function selectPart(kind){if(!state.parts[kind])return;stop();selected={kind};if(mode==='delete'){removeSelected();return;}mode='select';partPose(kind);first=null;clearPreview({hint:true});highlights=partTerminals(kind,state.parts[kind]);render();}
  function selectWire(id){const w=state.wires.find(w=>w.id===id);if(!w)return;stop();selected={wire:id};if(mode==='delete'){removeSelected();return;}mode='select';first=null;clearPreview({hint:true});highlights=[w.from,w.to];render();}
- function chooseTool(k){stop();clearPreview({hint:true});mode=k;selected=null;first=null;highlights=[];partPose(k);if(state.parts[k]){selectPart(k);return;}render();if(project.parts.includes(k))focusTargets(['bb:a1','bb:j15']);}
+ function chooseTool(k){stop();clearPreview({hint:true});mode=k;selected=null;first=null;firstRequested=null;wireStatus='';highlights=[];if(k==='wire'){message='Choose a start contact, then the other end. Solid wires are already connected.';tone='neutral';}partPose(k);if(state.parts[k]){selectPart(k);return;}render();if(project.parts.includes(k))focusTargets(['bb:a1','bb:j15']);}
  function removeSelected(){if(!selected)return;const next=copy(state);if(selected.kind)next.parts[selected.kind]=null;else next.wires=next.wires.filter(w=>w.id!==selected.wire);selected=null;if(mode!=='delete')mode='select';edit(next,'Deleted. Undo brings it back.');}
  function revealCanvas(){if(matchMedia('(max-width:760px)').matches)$('#build-canvas-wrap').scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'instant':'smooth'});}
  function checkCircuit(){stop();clearPreview({hint:true});check=validateCircuit(state);message=check.message||check.title;tone=check.ok?'success':'error';highlights=check.targets||[];first=null;selected=check.code==='reversed_led'?{kind:'led'}:null;mode='select';render();if(!check.ok){focusTargets(highlights);showCallout(check.title||check.message,highlights[0],check.code==='reversed_led'?'flip':null);revealCanvas();}}
- function run(){if(running){stop();message='Stopped. Your checked circuit is ready.';render();return;}const fresh=validateCircuit(state);if(!check?.ok||!fresh.ok){checkCircuit();return;}clearPreview({hint:true});running=true;startTime=performance.now();simulationSignature='';message=project.id==='blink'?'Circuit complete. GPIO23 is driving your LED.':project.id==='button'?'Hold the button to light the LED.':'Turn the dial to change LED brightness.';tone='success';if(project.id!=='blink')highlights=[...partTerminals('led',state.parts.led),...partTerminals(project.id,state.parts[project.id])];try{const done=JSON.parse(localStorage.getItem(COMPLETE)||'[]');localStorage.setItem(COMPLETE,JSON.stringify([...new Set([...(Array.isArray(done)?done:[]),project.id])]));}catch{}render();if(project.id!=='blink')focusTargets(highlights);}
+ function run(){if(running){stop();message='Stopped. Your checked circuit is ready.';render();return;}const fresh=validateCircuit(state);if(!check?.ok||!fresh.ok){checkCircuit();return;}first=null;firstRequested=null;selected=null;wireStatus='';mode='select';clearPreview({hint:true});running=true;startTime=performance.now();simulationSignature='';message=project.id==='blink'?'Circuit complete. GPIO23 is driving your LED.':project.id==='button'?'Hold the button to light the LED.':'Turn the dial to change LED brightness.';tone='success';if(project.id!=='blink')highlights=[...partTerminals('led',state.parts.led),...partTerminals(project.id,state.parts[project.id])];try{const done=JSON.parse(localStorage.getItem(COMPLETE)||'[]');localStorage.setItem(COMPLETE,JSON.stringify([...new Set([...(Array.isArray(done)?done:[]),project.id])]));}catch{}render();if(project.id!=='blink')focusTargets(highlights);}
  function hintPlacement(kind){
   const viable=p=>{if(!p||placementIssue(state,kind,p))return false;const nets=partTerminals(kind,p).map(netOf),separate=kind==='button'?![nets[0],nets[1]].some(n=>n===nets[2]||n===nets[3]):new Set(nets).size===nets.length;if(!separate)return false;const trial=copy(state);trial.parts[kind]=p;return !project.parts.every(k=>trial.parts[k])||connectionPlan(trial)!==null;};
   const preferred=project.placements[kind];if(viable(preferred))return preferred;
   for(const id of endpoints.filter(id=>id.startsWith('bb:')))for(const angle of [0,90,180,270]){const p=placement(kind,id,angle,false);if(viable(p))return p;}
   return null;
  }
- function hint(){
-  const result=validateCircuit(state);if(!result.ok)stop();clearPreview({hint:true});selected=null;first=null;const missing=['resistor','led',...project.parts.filter(k=>!['resistor','led'].includes(k))].find(k=>project.parts.includes(k)&&!state.parts[k]);let text='',short='',targets=[];
+ function hint({afterConnection=false}={}){
+  const result=validateCircuit(state);if(!result.ok)stop();clearPreview({hint:true});selected=null;first=null;firstRequested=null;wireStatus=afterConnection?'connected':'';tone='neutral';message=afterConnection?'Wire connected. Follow the next preview.':'Follow the highlighted suggestion.';const missing=['resistor','led',...project.parts.filter(k=>!['resistor','led'].includes(k))].find(k=>project.parts.includes(k)&&!state.parts[k]);let text='',short='',targets=[];
   if(missing){const p=hintPlacement(missing);if(p){hintGhost={kind:missing,...p};targets=partTerminals(missing,p);text=`Place ${project.labels[missing]} at the dashed preview: ${targets.map(name).join(' / ')}. Other free positions also work.`;short=`Place ${project.labels[missing]} here`;mode=missing;const a=parseEndpoint(p.a),b=parseEndpoint(p.b);orientation=b.row>a.row?0:b.row<a.row?180:b.column>a.column?90:270;flipped=false;}else{text='Existing connections need a change before this part can complete the circuit. Check the wires or move a part to free separate rows.';short='Check the existing connections';}}
-  else if(result.ok){text=running?'Your circuit is running. The controls let you try its response.':'Your circuit is connected. Check it, then press Run.';short=running?'Circuit running':'Ready to check';targets=terminals();mode='select';}
+  else if(result.ok){text=running?'Your circuit is running. The controls let you try its response.':'Your circuit is connected. Check it, then press Run.';message=text;short=running?'Circuit running':'Ready to check';targets=terminals();mode='select';}
   else if(result.code==='reversed_led'){selected={kind:'led'};partPose('led');hintGhost={kind:'led',a:state.parts.led.b,b:state.parts.led.a};targets=[state.parts.led.a,state.parts.led.b];text=result.message;short='Swap the + and − legs';mode='select';}
-  else{const next=connectionPlan(state)?.[0];if(next){hintGhost={kind:'wire',from:next.from,to:next.to};targets=[next.from,next.to];text=`Connect ${name(next.from)} to ${name(next.to)} along the dashed wire. Another free hole in the same strip also works.`;short=`${name(next.from)} → ${name(next.to)}`;mode='wire';}else{text=result.message||result.title;short=result.title||'Check this connection';targets=result.targets||[];mode='select';}}
+  else{const next=connectionPlan(state)?.[0];if(next){hintGhost={kind:'wire',from:next.from,to:next.to};guidedWire={from:next.from,to:next.to};targets=[next.from,next.to];text=`1. Choose ${name(next.from)}. 2. Choose ${name(next.to)}. The dashed wire is a preview; the solid wire appears after both clicks.`;short=`1 / 2 · Start at ${name(next.from)}`;mode='wire';}else{text=result.message||result.title;short=result.title||'Check this connection';targets=result.targets||[];mode='select';}}
   highlights=targets;render();$('#build-hint-copy').hidden=false;$('#build-hint-copy').textContent=text;focusTargets(targets);showCallout(short,targets[0],result.code==='reversed_led'?'flip':null);revealCanvas();
  }
  function setView(next){view=next;$('#build-viewport').toggleAttribute('hidden',view!=='top');$('#build-scene3d').hidden=view!=='3d';$('#build-top').setAttribute('aria-pressed',String(view==='top'));$('#build-3d').setAttribute('aria-pressed',String(view==='3d'));$('.build-pan-note').textContent=view==='top'?'Drag empty space to pan':'Drag to rotate';
@@ -224,7 +246,7 @@ export function mountBuild(container,{projectId='blink',onProjectChange=()=>{},o
  $('#build-open-picker').onclick=()=>{$('#build-contact-picker').open=true;$('#build-area').focus();$('#build-contact-picker').scrollIntoView({block:'nearest',behavior:'instant'});};
  $('#build-top').onclick=()=>setView('top');$('#build-3d').onclick=()=>setView('3d');$('#build-zoom-in').onclick=()=>zoom(.8);$('#build-zoom-out').onclick=()=>zoom(1.25);$('#build-fit').onclick=fit;$('#build-zoom').oninput=()=>setZoom(Number($('#build-zoom').value)/100);$('#build-project').onchange=()=>onProjectChange($('#build-project').value);
  $('#build-check').onclick=checkCircuit;$('#build-run').onclick=run;$('#build-hint').onclick=hint;$('#build-hint-near').onclick=hint;$('#build-exit').onclick=onExit;
- $('#build-cancel').onclick=()=>{selected=null;first=null;mode='select';highlights=[];clearPreview({hint:true});render();};$('#build-remove').onclick=removeSelected;
+ $('#build-cancel').onclick=()=>{if(mode==='wire'){cancelWire();return;}selected=null;first=null;mode='select';highlights=[];clearPreview({hint:true});render();};$('#build-remove').onclick=removeSelected;
  $('#build-rotate').onclick=()=>{orientation=(orientation+90)%360;const kind=selected?.kind;if(kind){const p=placement(kind,state.parts[kind].a,orientation,false);if(p&&!placementIssue(state,kind,p)){commitPart(kind,p);return;}preview=p?{kind,...p,invalid:true}:null;}message=`Footprint rotated to ${orientation}°. Choose its first hole.`;tone='neutral';render();};
  $('#build-flip').onclick=()=>{if(state.parts.led&&selected?.kind==='led'){const next=copy(state);[next.parts.led.a,next.parts.led.b]=[next.parts.led.b,next.parts.led.a];edit(next,'LED polarity reversed.');partPose('led');}else{flipped=!flipped;message=flipped?'The cathode (−) will be placed first.':'The anode (+) will be placed first.';render();}};
  $('#build-undo').onclick=()=>{if(!undo.length)return;stop();state=undo.pop();check=null;first=null;selected=null;highlights=[];mode='select';clearPreview({hint:true});message='Undone. Check the circuit before running.';tone='neutral';save();render();};
@@ -234,7 +256,7 @@ export function mountBuild(container,{projectId='blink',onProjectChange=()=>{},o
  $('#build-download').onclick=()=>{const url=URL.createObjectURL(new Blob([sketch()],{type:'text/plain'})),a=document.createElement('a');a.href=url;a.download=`build-${project.id}.ino`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
  if($('#build-hold')){const button=$('#build-hold');button.onpointerdown=e=>{button.setPointerCapture(e.pointerId);interact({type:'press',pressed:true});};for(const event of ['pointerup','pointercancel','lostpointercapture'])button.addEventListener(event,()=>interact({type:'press',pressed:false}));button.onkeydown=e=>{if(e.code==='Space'||e.code==='Enter'){e.preventDefault();interact({type:'press',pressed:true});}};button.onkeyup=e=>{if(e.code==='Space'||e.code==='Enter'){e.preventDefault();interact({type:'press',pressed:false});}};button.onblur=()=>interact({type:'press',pressed:false});}
  if($('#build-dial'))$('#build-dial').oninput=()=>interact({type:'value',value:Number($('#build-dial').value)});
- function key(e){if(document.querySelector('dialog[open]')||/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)||e.target.isContentEditable)return;if(e.key==='Escape'){first=null;selected=null;mode='select';highlights=[];clearPreview({hint:true});render();}if((e.key==='Delete'||e.key==='Backspace')&&selected){e.preventDefault();removeSelected();}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();$('#build-undo').click();}}
+ function key(e){if(document.querySelector('dialog[open]')||/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)||e.target.isContentEditable)return;if(e.key==='Escape'){if(mode==='wire')cancelWire();else{first=null;selected=null;mode='select';highlights=[];clearPreview({hint:true});render();}}if((e.key==='Delete'||e.key==='Backspace')&&selected){e.preventDefault();removeSelected();}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();$('#build-undo').click();}}
  container.addEventListener('keydown',key);
  function hidden(){if(document.hidden&&running){stop();message='Paused while the page is hidden.';render();}}
  document.addEventListener('visibilitychange',hidden);

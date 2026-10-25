@@ -247,6 +247,64 @@ async function mobileGestures(p){
   await p.screenshot({path:path.join(out,'mobile-pinch-in-viewport.png')});await activate(p,'#build-fit',true);
   record('Real two-finger SVG pinch magnifies the editor without accidental assembly changes');
 }
+function physicalContactsAreUnique(circuit){
+  const contacts=[...Object.values(circuit.parts).filter(Boolean).flatMap(part=>Object.values(part).filter(v=>typeof v==='string')),...circuit.wires.flatMap(w=>[w.from,w.to])];
+  assert.equal(new Set(contacts).size,contacts.length,'Every physical contact still holds only one lead');
+}
+async function wireRetryExercises(p){
+  await place(p,'led','bb:e6',{pointer:true});await place(p,'resistor','bb:c8',{pointer:true});
+  await wire(p,'pin:23','bb:d8',{pointer:true});await wire(p,'pin:GND','rail:L+:16',{pointer:true});
+  const original=await state(p),busy=new Set([...Object.values(original.parts).flatMap(part=>Object.values(part).filter(v=>typeof v==='string')),...original.wires.flatMap(w=>[w.from,w.to])]);
+  await activate(p,S.wire);await activate(p,'#build-fit');
+  await contact(p,'bb:e6',{pointer:true});
+  const chosen=await p.locator('.build-contact.is-first').getAttribute('data-build-contact');
+  assert.ok(chosen&&!busy.has(chosen),'Occupied LED lead resolves to a genuinely free starting contact');
+  assert.notEqual(chosen,'bb:e6');assert.notEqual(await p.locator(S.feedback).getAttribute('data-tone'),'error');
+  const relocationText=await p.locator(S.feedback).innerText();assert.match(relocationText,/E6/i);assert.match(relocationText,new RegExp(chosen.slice(3),'i'),'The remapped contact is explicitly explained');
+  await contact(p,'bb:e6',{pointer:true});assert.equal(await p.locator('.build-contact.is-first').count(),0,'Clicking the same requested source again cancels');
+
+  await contact(p,'pin:GND',{pointer:true});await contact(p,'rail:L+:16',{pointer:true});
+  assert.equal((await state(p)).wires.length,2,'Already connected nets do not receive another redundant wire');
+  assert.equal(await p.locator('.build-contact.is-first').count(),0,'Already-connected attempt releases its pending source');
+  assert.match(await p.locator(S.feedback).innerText(),/already connected/i);assert.notEqual(await p.locator(S.feedback).getAttribute('data-tone'),'error');
+  await screenshot(p,'wire-duplicate-recovered');
+
+  // An ordinary next click begins a new wire; no Escape, tool reselection or Reset.
+  await contact(p,'bb:a11',{pointer:true});const target=await center(p.locator('[data-build-contact="bb:e6"]'));await p.mouse.move(target.x,target.y);
+  const ghost=p.locator('[data-build-ghost="wire"][data-build-targets]');await ghost.waitFor({state:'visible'});
+  const preview=(await ghost.getAttribute('data-build-targets')).split(',');
+  await contact(p,'bb:e6',{pointer:true});const added=(await state(p)).wires.at(-1);
+  assert.deepEqual([added.from,added.to],preview,'Click commits the same free physical contacts shown by the preview');
+  assert.equal((await state(p)).wires.length,3);physicalContactsAreUnique(await state(p));
+  await activate(p,S.undo);assert.deepEqual(await state(p),original);
+  record('Occupied starts, duplicate attempts and ordinary retries recover without Reset; preview and committed contacts agree');
+
+  await activate(p,S.check);assert.equal(await p.locator(S.run).isDisabled(),true);assert.equal(await p.locator(S.feedback).getAttribute('data-tone'),'error');
+  await activate(p,S.hint);assert.notEqual(await p.locator(S.feedback).getAttribute('data-tone'),'error','A valid hint clears the stale failure');
+  assert.equal(await p.locator('#build-inline-feedback').isVisible(),false);
+  const firstGhost=(await p.locator('[data-build-ghost="wire"][data-build-targets]').getAttribute('data-build-targets')).split(',');
+  for(const id of firstGhost)await contact(p,id,{pointer:true});
+  await p.waitForFunction(old=>{const g=document.querySelector('[data-build-ghost="wire"][data-build-targets]');return g&&g.dataset.buildTargets!==old;},firstGhost.join(','));
+  const nextGhost=(await p.locator('[data-build-ghost="wire"][data-build-targets]').getAttribute('data-build-targets')).split(',');
+  await screenshot(p,'wire-guidance-next-step');
+  for(const id of nextGhost)await contact(p,id,{pointer:true});
+  await checkAndRun(p);const complete=await state(p);physicalContactsAreUnique(complete);
+  assert.deepEqual(complete.parts,original.parts,'The user’s custom component positions are retained');
+  for(const w of original.wires)assert.ok(complete.wires.some(v=>JSON.stringify(v)===JSON.stringify(w)),'Every original wire is retained');
+  await screenshot(p,'custom-draft-completed-without-reset');
+  record('The reported custom draft completes through automatically advancing hints without resetting, moving parts or deleting original wires');
+  await activate(p,S.run);await activate(p,S.wire);await activate(p,'#build-fit');await contact(p,'bb:j25',{pointer:true});
+  assert.equal(await p.locator('.build-contact.is-first').count(),1);assert.equal(await p.locator(S.run).isDisabled(),false,'An uncommitted wire does not invalidate the checked circuit');
+  await activate(p,S.run);assert.equal(await running(p),true);assert.equal(await p.locator('.build-contact.is-first').count(),0);
+  assert.equal(await p.locator('[data-build-ghost="wire"]').count(),0);assert.equal(await p.locator('#build-root').getAttribute('data-tool'),'select');
+  assert.deepEqual(await state(p),complete,'Starting Run discards only the unfinished gesture');
+  record('Run clears an unfinished wire and enters Select without altering the checked circuit');
+}
+function writeReport(){
+  for(const name of ['failure.json','failure.png'])fs.rmSync(path.join(out,name),{force:true});
+  fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({result:'passed',checks,errors,output:out},null,2));
+  console.log(JSON.stringify({result:'passed',checks:checks.length,errors,output:out}));
+}
 async function main(){
   await new Promise(r=>server.listen(4194,'127.0.0.1',r));
   const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE||undefined,headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--enable-unsafe-swiftshader','--use-angle=swiftshader','--use-gl=angle']});
@@ -254,6 +312,7 @@ async function main(){
   try{
     const ctx=await browser.newContext({viewport:{width:1366,height:768},reducedMotion:'reduce'});await instrument(ctx);
     page=await ctx.newPage();collect(page);await page.goto(origin+'#build-blink',{waitUntil:'networkidle'});await ready(page);
+    if(process.env.QA_CASE==='wire-retry'){await wireRetryExercises(page);assert.deepEqual(errors,[]);writeReport();return;}
     assert.equal(await page.locator('#lesson-main').isVisible(),false);assert.deepEqual((await state(page)).parts,{led:null,resistor:null});
     await fits(page,'1366×768 empty builder');await screenshot(page,'desktop-empty');
     await page.locator(S.check).click();assert.equal(await page.locator(S.run).isDisabled(),true);record('Empty build cannot run');
@@ -319,13 +378,15 @@ async function main(){
 
     // An occupied physical hole cannot accept another lead even if the net matches.
     const beforeOccupied=await state(page);
-    await wire(page,'pin:GND2','bb:c6');assert.deepEqual((await state(page)).wires,beforeOccupied.wires);
-    assert.match(await page.locator(S.feedback).innerText(),/occupied|hole|lead/i);await page.keyboard.press('Escape');
-    await wire(page,'pin:23','bb:a6');assert.equal((await state(page)).wires.length,2);await page.keyboard.press('Escape');
-    record('Occupied holes and duplicate jumpers do not mutate the circuit');
+    await wire(page,'pin:GND2','bb:c6');assert.equal((await state(page)).wires.length,3);physicalContactsAreUnique(await state(page));
+    await activate(page,S.check);assert.equal(await page.locator(S.run).isDisabled(),true,'Physical remapping does not hide an electrical short');
+    await activate(page,S.undo);assert.deepEqual(await state(page),beforeOccupied);
+    await wire(page,'pin:23','bb:a6');assert.equal((await state(page)).wires.length,2);
+    assert.equal(await page.locator('.build-contact.is-first').count(),0);assert.match(await page.locator(S.feedback).innerText(),/already connected/i);
+    record('Occupied contacts resolve to spare holes, shorts remain rejected, and duplicate connections release their source');
 
     // Pointer selection and movement exercise the actual SVG hit targets.
-    const beforeMove=await state(page);await selectedPart(page,'resistor');await page.locator('#build-fit').click();
+    const beforeMove=await state(page);await activate(page,S.select);await selectedPart(page,'resistor');await page.locator('#build-fit').click();
     await page.locator('[data-build-contact="bb:c16"]').click();
     assert.equal((await state(page)).parts.resistor.a,'bb:c16');assert.equal(await running(page),false);
     await page.locator(S.check).click();assert.equal(await page.locator(S.run).isDisabled(),true);
@@ -409,10 +470,9 @@ async function main(){
     await checkAndRun(f,{touch:true});await f.waitForFunction(()=>document.querySelector('.build-led-bulb')?.classList.contains('is-lit'));
     await f.waitForFunction(()=>!document.querySelector('.build-led-bulb')?.classList.contains('is-lit'));
     await screenshot(f,'mobile-webgl-fallback');record('WebGL-disabled phone falls back to Top view with a working Check and blinking Run');
-    assert.deepEqual(errors,[]);
-    for(const name of ['failure.json','failure.png'])fs.rmSync(path.join(out,name),{force:true});
-    fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({result:'passed',checks,errors,output:out},null,2));
-    console.log(JSON.stringify({result:'passed',checks:checks.length,errors,output:out}));
+    const retry=await browser.newContext({viewport:{width:1366,height:768},reducedMotion:'reduce'});await instrument(retry);
+    const r=await retry.newPage();page=r;collect(r);await r.goto(origin+'#build-blink',{waitUntil:'networkidle'});await ready(r);await wireRetryExercises(r);
+    assert.deepEqual(errors,[]);writeReport();
   }catch(e){if(page)await screenshot(page,'failure').catch(()=>{});fs.writeFileSync(path.join(out,'failure.json'),JSON.stringify({error:String(e),checks,errors},null,2));throw e;}
   finally{await browser.close();await new Promise(r=>server.close(r));}
 }

@@ -56,6 +56,8 @@ Open **Build** in the navigation and choose a project. Each starts with an ESP32
 
 **Check** evaluates connectivity, LED polarity, current limiting, occupied holes and power shorts. Valid layouts may use different rows, wire colors, power rails or a resistor on either side of the LED. Each breadboard row connects a–e separately from f–j; the four power rails are continuous and independent. Each contact holds one lead or jumper. The two ESP32 ground pins share a net but are separate physical contacts.
 
+In Wire mode, an occupied terminal resolves to a free contact on the same conducting connection; the preview shows the actual endpoint before you connect it. This follows breadboard strips and existing wires, never a resistor or LED. Already connected endpoints do not add duplicate wires. Guided wiring advances to the next connection after each completed wire.
+
 Run is available after a successful check. Editing or restoring a draft stops playback and requires a fresh check. Hints show proposed components or wires at their actual positions, with short explanations beside the target. Undo preserves the previous edit, including a reset. Each project has its own saved draft; assembly completion is separate from lesson quizzes.
 
 These are connectivity checkers for the three supplied projects, not an arbitrary electrical solver or C++ compiler. Each checked circuit drives its matching demonstration. The button models its two permanently connected leg pairs and its pressed state. The potentiometer models distinct track ends and a wiper, including reversed outer connections. Lesson scenes retain their illustrative wires; Build mode attaches its wires to the selected contacts.

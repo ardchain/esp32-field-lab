@@ -302,7 +302,12 @@ export function createScene(container, callbacks = {}) {
     clearCircuit(buildGhosts);buildGhosts.clear();container.dataset.buildGhost=preview?.kind||'';
     if(!preview)return;
     const savedCircuit=circuit,savedAnim=anim,savedMeshes=meshes;circuit=buildGhosts;anim={};meshes=[];
-    try{if(preview.kind==='wire'){const a=buildEndpointPosition(preview.from),b=buildEndpointPosition(preview.to);if(a&&b)wire(a,b,preview.invalid?0xc65e46:0x2a9c89);}else buildComponent(preview.kind,preview);}
+    try{if(preview.kind==='wire'){const a=buildEndpointPosition(preview.from),b=buildEndpointPosition(preview.to);if(a&&b){
+      const ghost=wire(a,b,preview.invalid?0xc65e46:0x2a9c89),geometry=ghost.geometry,index=geometry.getIndex(),segments=geometry.parameters.tubularSegments,step=geometry.parameters.radialSegments*6,dashes=[];
+      // Only the preview has gaps; committed jumpers keep their solid geometry.
+      for(let segment=0;segment<segments;segment++)if(segment%4<2||segment===segments-1)for(let i=0;i<step;i++)dashes.push(index.getX(segment*step+i));
+      geometry.setIndex(dashes);
+    }}else buildComponent(preview.kind,preview);}
     finally{circuit=savedCircuit;anim=savedAnim;meshes=savedMeshes;}
     const clones=new Map();buildGhosts.traverse(o=>{if(!o.isMesh)return;const original=o.material;let m=clones.get(original);if(!m){m=persistentMaterials.has(original)?original.clone():original;if(m!==original)materials.add(m);m.transparent=true;m.opacity=preview.kind==='wire'?.65:.46;m.depthWrite=false;m.color.lerp(new THREE.Color(preview.invalid?0xcf6c51:0x38ad9a),.85);clones.set(original,m);}o.material=m;o.castShadow=false;o.receiveShadow=false;o.renderOrder=5;o.userData.buildGhost=true;});
     cameraAnimatingUntil=performance.now()+250;

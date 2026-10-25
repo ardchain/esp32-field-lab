@@ -331,5 +331,106 @@ const assert=require('node:assert/strict');
     assert.equal(M.connectionPlan(M.initialState('button')),null);
     const reversed=valid();[reversed.parts.led.a,reversed.parts.led.b]=[reversed.parts.led.b,reversed.parts.led.a];assert.equal(M.connectionPlan(reversed),null);
   });
+  const screenshotBuild=()=>({...setup({a:'bb:e6',b:'bb:e7'},{a:'bb:c8',b:'bb:c11',ohms:330}),
+    wires:[wire('signal','pin:23','bb:d8'),wire('ground','pin:GND','rail:L+:16')]});
+  test('wire resolution keeps free contacts unchanged and canonicalizes aliases',()=>{
+    const s=M.initialState();assert.deepEqual(M.resolveWireEndpoint(s,'pin:GPIO23'),{ok:true,requested:'pin:23',endpoint:'pin:23',redirected:false});
+    assert.deepEqual(M.resolveWireConnection(s,'pin:GPIO23','bb:e6'),{ok:true,from:'pin:23',to:'bb:e6',redirected:[]});
+    assert.equal(M.resolveWireEndpoint(s,'bb:k1').code,'invalid_endpoint');
+    assert.equal(M.resolveWireConnection(s,'bb:a1','pin:999').code,'invalid_endpoint');
+    assert.equal(M.resolveWireEndpoint(null,'bb:a1').code,'invalid_state');
+  });
+  test('occupied component clicks resolve to the nearest free hole in their own strip',()=>{
+    const s=screenshotBuild();assert.equal(M.resolveWireEndpoint(s,'bb:e6').endpoint,'bb:d6');
+    const link=M.resolveWireConnection(s,'bb:e6','bb:c11');
+    assert.deepEqual(link,{ok:true,from:'bb:d6',to:'bb:b11',redirected:[{requested:'bb:e6',endpoint:'bb:d6'},{requested:'bb:c11',endpoint:'bb:b11'}]});
+    assert.equal(M.wireIssue(s,link.from,link.to),null);
+    assert.equal(M.wireIssue(s,'bb:e6','bb:c11').code,'occupied_contact');
+    const raw=clone(s);raw.wires.push(wire('collision','bb:e6','bb:c11'));verdict(raw,'occupied_contact');
+    assert.equal(M.normalizeState(raw).wires.length,s.wires.length);
+  });
+  test('occupied GPIO and ground clicks find nearby holes at attached jumper ends',()=>{
+    const s=screenshotBuild();assert.equal(M.resolveWireEndpoint(s,'pin:23').endpoint,'bb:e8');
+    assert.equal(M.resolveWireEndpoint(s,'pin:GND').endpoint,'rail:L+:15');
+    const link=M.resolveWireConnection(s,'pin:GND','bb:e7');assert.equal(link.from,'rail:L+:15');assert.equal(link.to,'bb:d7');
+    assert.equal(M.wireIssue(s,link.from,link.to),null);
+    // A free hole in the originally clicked strip takes priority over remote holes.
+    s.wires.push(wire('branch','bb:a6','bb:a24'));assert.equal(M.resolveWireEndpoint(s,'bb:e6').endpoint,'bb:d6');
+  });
+  test('already connected contacts are reported before occupancy or spare-hole resolution',()=>{
+    const s=screenshotBuild();
+    for(const [from,to] of [['pin:GND','rail:L+:25'],['pin:GND2','rail:L+:16'],['pin:23','bb:c8'],['bb:e6','bb:a6'],['bb:e6','bb:e6']]){
+      const result=M.resolveWireConnection(s,from,to);assert.equal(result.alreadyConnected,true);assert.ok(result.targets.includes(from));
+    }
+    const full=M.initialState();full.wires=[wire('only','pin:23','pin:22')];
+    assert.equal(M.resolveWireEndpoint(full,'pin:23').code,'no_free_contact');
+    assert.equal(M.resolveWireConnection(full,'pin:23','pin:22').alreadyConnected,true);
+  });
+  test('wire endpoint exclusions reserve contacts without changing the circuit',()=>{
+    const s=screenshotBuild();assert.equal(M.resolveWireEndpoint(s,'bb:e6',{exclude:['bb:d6']}).endpoint,'bb:c6');
+    assert.equal(M.resolveWireEndpoint(s,'bb:a6',{exclude:['bb:a6']}).endpoint,'bb:b6');
+    assert.equal(M.resolveWireEndpoint(s,'pin:GND2',{exclude:['pin:GND-L']}).endpoint,'rail:L+:15');
+    assert.equal(M.resolveWireEndpoint(s,'bb:e6',{exclude:['bb:a6','bb:b6','bb:c6','bb:d6']}).code,'no_free_contact');
+  });
+  test('endpoint resolution never traverses LED, resistor or potentiometer terminals',()=>{
+    const fixtures=[
+      [screenshotBuild(),'bb:e6',[['bb:a6','bb:b6'],['bb:c6','bb:d6']]],
+      [setup(),'bb:c6',[['bb:a6','bb:b6'],['bb:d6','bb:e6']]],
+      [projectSetup('potentiometer'),'bb:h19',[['bb:f19','bb:g19'],['bb:i19','bb:j19']]],
+    ];
+    for(const [s,terminal,pairs] of fixtures){
+      s.wires.push(...pairs.map(([from,to],i)=>wire('fill-'+i,from,to)));
+      assert.equal(M.resolveWireEndpoint(s,terminal).code,'no_free_contact');
+    }
+    const s=projectSetup('potentiometer');assert.equal(M.resolveWireConnection(s,'bb:h18','bb:h19').alreadyConnected,undefined);
+    assert.equal(M.resolveWireConnection(setup(),'bb:c6','bb:c9').alreadyConnected,undefined);
+  });
+  test('endpoint resolution follows permanent button pairs but never a pressed switch',()=>{
+    const s=projectSetup('button');s.pressed=true;
+    s.wires=[wire('fill1','bb:a16','bb:b16'),wire('fill2','bb:c16','bb:e16')];
+    assert.equal(M.resolveWireEndpoint(s,'bb:d16').endpoint,'bb:c18');
+    assert.equal(M.resolveWireConnection(s,'bb:d16','bb:d18').alreadyConnected,true);
+    assert.equal(M.resolveWireConnection(s,'bb:d16','bb:f16').alreadyConnected,undefined);
+    s.wires.push(wire('fill3','bb:a18','bb:b18'),wire('fill4','bb:c18','bb:e18'));
+    assert.equal(M.resolveWireEndpoint(s,'bb:d16').code,'no_free_contact');
+  });
+  test('a fully occupied rail cannot spill into an adjacent rail or board pin',()=>{
+    const s=M.initialState();
+    for(let i=1;i<25;i+=2)s.wires.push(wire('fill-'+i,`rail:L+:${i}`,`rail:L+:${i+1}`));
+    s.wires.push(wire('last','rail:L+:25','pin:22'));
+    assert.equal(M.resolveWireEndpoint(s,'rail:L+:16').code,'no_free_contact');
+    assert.equal(M.resolveWireConnection(s,'rail:L+:16','rail:L+:1').alreadyConnected,true);
+    assert.equal(M.resolveWireEndpoint(s,'rail:L-:16').endpoint,'rail:L-:16');
+  });
+  test('resolution follows jumper chains and falls back to a free common ground header',()=>{
+    const s=M.initialState();s.wires=[wire('a','pin:GND','pin:22')];
+    assert.equal(M.resolveWireEndpoint(s,'pin:GND').endpoint,'pin:GND2');
+    const chain=M.initialState();chain.wires=[wire('a','pin:23','bb:a1'),wire('b','bb:b1','bb:c1'),
+      wire('c','bb:d1','bb:e1')];
+    assert.equal(M.resolveWireEndpoint(chain,'pin:23').code,'no_free_contact');
+    chain.wires[2].to='rail:R-:14';assert.equal(M.resolveWireEndpoint(chain,'pin:23').endpoint,'bb:e1');
+    chain.wires.push(wire('d','bb:e1','rail:R-:18'));assert.equal(M.resolveWireEndpoint(chain,'pin:23').endpoint,'rail:R-:13');
+  });
+  test('physical resolution preserves wrong-pin choices for circuit validation and is pure',()=>{
+    const s=screenshotBuild(),before=JSON.stringify(s),link=M.resolveWireConnection(s,'pin:22','bb:c11');
+    assert.equal(link.ok,true);assert.equal(link.from,'pin:22');
+    M.resolveWireEndpoint(s,'pin:23');M.resolveWireConnection(s,'pin:GND','rail:L+:16');assert.equal(JSON.stringify(s),before);
+    const wrong=setup(),resolved=M.resolveWireConnection(wrong,'pin:22','bb:c6');
+    wrong.wires.push(wire('wrong',resolved.from,resolved.to),wire('gnd','bb:a10','pin:GND'));verdict(wrong,'wrong_gpio');
+  });
+  test('the screenshot assembly can be completed by clicking occupied component leads',()=>{
+    const s=screenshotBuild();
+    for(const [i,[from,to]] of [['bb:c11','bb:e6'],['bb:e7','pin:GND']].entries()){
+      const before=JSON.stringify(s),preview=M.resolveWireConnection(s,from,to);assert.equal(preview.ok,true);assert.equal(JSON.stringify(s),before);
+      s.wires.push(wire('confirmed-'+i,preview.from,preview.to));
+    }
+    verdict(s,'complete');assert.deepEqual(M.normalizeState(s),s);
+  });
+  test('resolved connections still obey the strict workspace wire limit',()=>{
+    const s=M.initialState();
+    for(let row=1;row<=30;row++)for(const cols of ['ab','cd'])s.wires.push(wire(cols+row,`bb:${cols[0]}${row}`,`bb:${cols[1]}${row}`));
+    assert.equal(M.resolveWireConnection(s,'pin:23','pin:34').code,'wire_limit');
+    assert.equal(M.resolveWireConnection(s,'bb:a1','bb:b1').alreadyConnected,true);
+  });
   console.log(JSON.stringify({result:'passed',tests:passed}));
 })().catch(error=>{console.error(error);process.exitCode=1;});
