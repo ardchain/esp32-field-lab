@@ -553,9 +553,9 @@ const learningNotes = {
     ],
     experiment: {
       prediction: 'If you double both the on and off intervals, does the LED blink twice as fast or half as fast?',
-      action: 'Run the simulation and tap the LED to cycle through intervals. Use the slider to compare 250 ms with 1000 ms. To reproduce a setting on hardware, change INTERVAL_MS in the sketch and upload it.',
+      action: 'Run the simulation and tap the LED to cycle through intervals. Use the slider to compare 250 ms with 1000 ms. To reproduce your setting on hardware, download the updated sketch from Code and upload it using the Arduino IDE.',
       observe: 'At 250 ms, one complete blink takes 500 ms. At 1000 ms, it takes two seconds. The on and off portions remain equal.',
-      why: 'The full period is the on-time plus the off-time. Increasing both intervals increases the period and decreases the frequency. The simulation changes this timing parameter; it does not compile the displayed sketch.'
+      why: 'The full period is the on-time plus the off-time. Increasing both intervals increases the period and decreases the frequency. The slider updates INTERVAL_MS in the demo and example sketch. It does not compile or upload code.'
     },
     troubleshooting: ['The LED stays dark: power down, check its polarity and verify that the resistor and LED form a series path to GND.', 'The wrong LED blinks: this lesson uses an external LED on GPIO23. Built-in LEDs differ between ESP32 development boards.'],
     takeaway: 'An output needs both correct code and a complete, current-limited circuit. Blink frequency depends on the whole on/off cycle.'

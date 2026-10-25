@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "start": "python3 -m http.server 4173 -d dist",
-    "check": "node --check dist/app.js && node --check dist/scene.js && node --check dist/lessons.js && node --check dist/guides.js && node --check dist/diagrams.js",
-    "test": "node tests/viewport.cjs && node tests/browser.cjs && node tests/guides.cjs"
+    "check": "node --check dist/app.js && node --check dist/scene.js && node --check dist/lessons.js && node --check dist/guides.js && node --check dist/diagrams.js && node --check dist/build.js && node --check dist/build-circuit.js",
+    "test:circuit": "node tests/build-circuit.cjs",
+    "test:build": "npm run test:circuit && node tests/build-browser.cjs",
+    "test": "npm run test:circuit && node tests/viewport.cjs && node tests/browser.cjs && node tests/guides.cjs && node tests/build-browser.cjs"
   },
-  "description": "An interactive 3D ESP32 classroom with 16 lessons and guided circuit explanations.",
+  "description": "An interactive 3D ESP32 classroom with 16 lessons, guided connections and circuit assembly practice.",
   "license": "MIT",
   "repository": {
     "type": "git",

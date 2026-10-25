@@ -27,6 +27,8 @@ jobs:
           node-version: '22'
       - name: Check JavaScript
         run: npm run check
+      - name: Check circuit rules
+        run: npm run test:circuit
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

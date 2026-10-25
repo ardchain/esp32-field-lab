@@ -10,7 +10,8 @@ An interactive, browser-based classroom for the original 30-pin ESP32 DevKit V1 
 - Direct interaction: hold a button, turn a knob, cover a light sensor, play piano keys or move a servo.
 - 68 visual connection steps: the camera frames each part and highlights exact pins and resistor values. Every Pinout row opens its matching explanation.
 - Electrical diagrams, a breadboard primer, Arduino examples, experiments and knowledge checks.
-- Saved progress on your current browser; no account or backend required.
+- Build a Blink circuit: place an LED and resistor, connect real breadboard strips, check the circuit and test it in 3D.
+- Saved lesson progress and assembly drafts in your current browser; no account or backend required.
 - A desktop workbench that fits the window, with scrolling inside the lesson panel; touch controls and page scrolling on phones.
 - Keyboard navigation and reduced-motion support.
 
@@ -30,7 +31,7 @@ python3 -m http.server 4173 -d dist
 
 Open <http://localhost:4173>. Serve the files over HTTP rather than opening `index.html` directly, because the application uses JavaScript modules.
 
-## Controls
+## Lesson controls
 
 Drag empty space to rotate horizontally. Scroll or pinch to zoom. Hover or tap a passive part to inspect it, or use the component library. Operate interactive parts using the hint above the scene; the demonstration starts automatically. Shift/Alt-click an interactive part to inspect it.
 
@@ -41,18 +42,32 @@ Choose **Show the connections**, or select a **Pinout** row, for a guided close-
 - **[ / ]:** previous or next lesson.
 - **Escape:** close a panel.
 
+## Build a circuit
+
+Open **Build** in the navigation, or visit [the Blink workspace](https://ardchain.github.io/esp32-field-lab/#build-blink). The first assembly project starts with an ESP32 and an empty breadboard. Place the supplied LED and resistor, then select two contacts to add a wire. The top view supports precise editing; the 3D view uses the same board and component models as the course. Contact selectors provide an alternative to pointing at small holes.
+
+![An assembled Blink circuit running in the Build workspace](docs/build.png)
+
+**Check** evaluates connectivity, LED polarity, current limiting, occupied holes and power shorts. Valid layouts may use different rows, wire colors, power rails or a resistor on either side of the LED. Each breadboard row connects a–e separately from f–j; the four power rails are continuous and independent. Each contact holds one lead or jumper. The two ESP32 ground pins share a net but are separate physical contacts.
+
+Run is available after a successful check. Editing or restoring a draft stops playback and requires a fresh check. Hints help with the current circuit; undo preserves the previous edit, including a reset. Assembly drafts and completion are stored separately from lesson quizzes.
+
+This is a checker for the supplied Blink project, not an arbitrary electrical solver or C++ compiler. Its checked circuit drives the matching blink demonstration. Lesson scenes retain their illustrative wires; Build mode attaches its wires to the selected contacts.
+
 ## Project structure
 
 | Path | Purpose |
 | --- | --- |
 | `dist/index.html` | Application shell |
 | `dist/app.js` | Navigation, lesson panels, controls, quizzes and progress |
-| `dist/scene.js` | Procedural 3D models, camera, highlights and interactions |
+| `dist/scene.js` | Procedural 3D models, camera, highlights, assembly rendering and interactions |
+| `dist/build.js`, `dist/build.css` | Assembly editor, hints, validation feedback and draft persistence |
+| `dist/build-circuit.js` | Breadboard nets, component footprints, occupancy and Blink circuit rules |
 | `dist/lessons.js` | Lesson content, Arduino sketches and component reference |
 | `dist/guides.js` | Step-by-step visual connection tours |
 | `dist/diagrams.js` | Circuit diagrams and breadboard connectivity |
 | `dist/style.css`, `dist/guide.css` | Responsive layout and styles |
-| `tests/` | Browser regression checks |
+| `tests/` | Circuit-rule tests and browser regression checks |
 
 ## Checks
 
@@ -65,7 +80,9 @@ npx playwright install --with-deps chromium
 npm test
 ```
 
-The browser checks cover all lessons, direct device interactions, visual-guide targets, navigation, camera bounds, quizzes, stored progress and narrow layouts. They inject observation helpers into the served test response; production has no test globals. Tests start local servers on ports 4181, 4184 and 4185. Screenshots and reports go into temporary directories, or a directory set with `QA_OUTPUT`.
+The checks cover all lessons, direct device interactions, visual-guide targets, navigation, camera bounds, quizzes, stored progress and narrow layouts. Assembly checks include breadboard connectivity, alternate valid circuits, common wiring faults, real pointer/keyboard/touch assembly, 3D playback, undo, saved drafts and downloaded code.
+
+Run `npm run test:circuit` for the circuit rules alone, or `npm run test:build` for circuit rules plus assembly browser checks. Browser tests inject observation helpers into the served test response; production has no test globals. They start local servers on ports 4181, 4184, 4185 and 4194. Screenshots and reports go into temporary directories, or a directory set with `QA_OUTPUT`.
 
 To use an already-installed Chromium, set `CHROMIUM_EXECUTABLE` to its executable path before running the tests.
 
@@ -85,7 +102,7 @@ Progress and preferences use localStorage. They stay in the same browser and sit
 
 ### 3D model references
 
-The models depict selected component packages and common board variants. Terminal counts, pin names and mechanical orientation follow the references below; dimensions and small details are adapted for readability. These are stylized teaching illustrations, not dimensioned CAD or assembly drawings. Piano keycaps represent the eight input switches, and breadboard wire endpoints are illustrative.
+The models depict selected component packages and common board variants. Terminal counts, pin names and mechanical orientation follow the references below; dimensions and small details are adapted for readability. These are stylized teaching illustrations, not dimensioned CAD or assembly drawings. Piano keycaps represent the eight input switches. Lesson breadboard wire endpoints are illustrative; Build mode uses the selected contact coordinates.
 
 | Model | Hardware reference |
 | --- | --- |

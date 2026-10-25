@@ -9,6 +9,7 @@ const PCB_WIDTH=3.98, PCB_LENGTH=7.3, HEADER_X=1.8, HEADER_PITCH=.358, HEADER_Z0
 const headerZ=index=>HEADER_Z0+index*HEADER_PITCH;
 
 export function createScene(container, callbacks = {}) {
+  const buildMode=callbacks.buildMode===true;
   let renderer;
   const noop=()=>{};
   try { renderer = new THREE.WebGLRenderer({antialias:true,alpha:true,powerPreference:'low-power'}); }
@@ -17,7 +18,7 @@ export function createScene(container, callbacks = {}) {
     fallback.style.cssText='height:100%;display:grid;place-content:center;text-align:center;padding:28px;color:#284944;font:14px/1.6 sans-serif';
     fallback.innerHTML='<strong>Explore the ESP32</strong><span>The interactive board needs WebGL.<br>Try a recent version of Chrome, Edge, Firefox or Safari.<br>You can still read every lesson and use the pin guide.</span>';
     container.append(fallback); callbacks.onReady?.();
-    return {setLesson:noop,setRunning:noop,setValue:noop,setPressed:noop,setLabels:noop,setFlow:noop,reset:noop,rotate:noop,zoom:noop,focus:({targets=[]}={})=>({resolved:[],unresolved:targets}),clearFocus:noop,dispose:()=>fallback.remove()};
+    return {setLesson:noop,setRunning:noop,setValue:noop,setPressed:noop,setLabels:noop,setFlow:noop,setBuildState:noop,setBuildRunning:noop,setBuildHighlight:noop,focusBuildTargets:()=>({resolved:[],unresolved:[]}),reset:noop,rotate:noop,zoom:noop,focus:({targets=[]}={})=>({resolved:[],unresolved:targets}),clearFocus:noop,dispose:()=>fallback.remove()};
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
   renderer.setClearColor(0xf4f3ed,0);
@@ -28,7 +29,7 @@ export function createScene(container, callbacks = {}) {
   renderer.toneMappingExposure=1.04;
   renderer.domElement.style.cssText='display:block;width:100%;height:100%;touch-action:pan-y;outline:none;';
   renderer.domElement.tabIndex=0;
-  renderer.domElement.setAttribute('aria-label','Interactive ESP32 circuit. Drag empty space left or right to rotate. Scroll or pinch gently to zoom. Drag or press lesson devices to interact. Hold Shift while clicking a device to inspect it.');
+  renderer.domElement.setAttribute('aria-label',buildMode?'Your assembled ESP32 circuit in 3D. Drag empty space left or right to rotate. Scroll or pinch to zoom. Select a contact, component or wire; use Top view for precise placement.':'Interactive ESP32 circuit. Drag empty space left or right to rotate. Scroll or pinch gently to zoom. Drag or press lesson devices to interact. Hold Shift while clicking a device to inspect it.');
   container.append(renderer.domElement);
   if(getComputedStyle(container).position==='static')container.style.position='relative';
   const scene=new THREE.Scene();
@@ -41,6 +42,8 @@ export function createScene(container, callbacks = {}) {
   labelsEl.style.cssText='position:absolute;inset:0;pointer-events:none;overflow:hidden;';
   container.append(labelsEl);
   let labels=[], meshes=[], anim={}, lesson='board', running=false, value=50, pressed=false, labelsVisible=false, flow=false;
+  let buildState={parts:{led:null,resistor:null},wires:[],interval:500},buildHighlightTargets=[];
+  const buildHighlights=new THREE.Group();world.add(buildHighlights);
   const DEFAULT_YAW=-.13, MIN_ZOOM=.8, MAX_ZOOM=1.12;
   let rotation=DEFAULT_YAW, targetRotation=DEFAULT_YAW, zoomLevel=1, alive=true, frame=0, last=performance.now(), elapsed=0;
   let transition=null, gesture=null, frameBounds=null, viewWidth=600, viewHeight=500, focusState=null, cameraAnimatingUntil=0;
@@ -212,6 +215,97 @@ export function createScene(container, callbacks = {}) {
     print(1.38,.15,texture(512,64,c=>{c.fillStyle='#d7e2db';c.textAlign='center';c.font='26px monospace';c.fillText('GND  VCC  SCL  SDA',256,42);}),circuit,[x,.322,z+.39],'oled');
   }
   function updateOled(){if(!anim.oledTexture)return;const pct=Math.round(THREE.MathUtils.clamp(value,0,100)),key=running?String(pct):'off';if(anim.oledLast===key)return;anim.oledLast=key;const c=anim.oledTexture.image.getContext('2d');c.clearRect(0,0,512,256);if(running){c.fillStyle='#91dfcb';c.textAlign='center';c.font='25px monospace';c.fillText('SOIL MOISTURE',256,48);c.font='65px monospace';c.fillText(pct+'%',256,133);c.font='27px monospace';c.fillText(pct<30?'TIME TO WATER':'LOOKING GOOD',256,200);}anim.oledTexture.needsUpdate=true;}
+  // Builder coordinates follow the printed holes, so the preview uses the same
+  // connections as the editable top view and the circuit model.
+  function buildEndpointPosition(endpoint){
+    const id=String(endpoint),hole=/^bb:([a-j])([1-9]|[12]\d|30)$/.exec(id);
+    if(hole){const col=hole[1].charCodeAt(0)-97,row=Number(hole[2])-1;return[.9+(222+(col<5?col:col+1)*58)/1024*4,.14,-2.85+(100+row*45)/1536*5.8];}
+    const rail=/^rail:([LR])([+-]):([1-9]|1\d|2[0-5])$/.exec(id);
+    if(rail){const i=Number(rail[3])-1,x=rail[1]==='L'?(rail[2]==='+'?45:92):(rail[2]==='+'?979:932),row=Math.floor(i/5)*6+i%5;return[.9+x/1024*4,.14,-2.85+(100+row*45)/1536*5.8];}
+    if(!id.startsWith('pin:'))return null;
+    let key=id.slice(4).toUpperCase().replace(/^GPIO/,'');
+    if(key==='GND2')return[board.position.x-HEADER_X,.31,headerZ(13)];
+    key=({36:'VP',39:'VN',1:'TX0',3:'RX0',16:'RX2',17:'TX2'})[key]||key;
+    const right=PINS_RIGHT.indexOf(key),left=PINS_LEFT.indexOf(key);
+    if(right>=0)return[board.position.x+HEADER_X,.31,headerZ(right)];
+    if(left>=0)return[board.position.x-HEADER_X,.31,headerZ(left)];
+    return null;
+  }
+  function buildPartMeshes(group,id){
+    group.userData.buildPart=id;
+    group.traverse(o=>{if(o.isMesh){o.userData.buildPart=id;o.userData.part=id;if(!meshes.includes(o))meshes.push(o);}});
+  }
+  function buildComponent(kind,part){
+    if(!part)return;const a=buildEndpointPosition(part.a),b=buildEndpointPosition(part.b);if(!a||!b)return;
+    const dx=b[0]-a[0],dz=b[2]-a[2],span=Math.hypot(dx,dz);if(span<.01)return;
+    const x=(a[0]+b[0])/2,z=(a[2]+b[2])/2,angle=-Math.atan2(dz,dx);
+    if(kind==='resistor'){
+      const g=resistor(x,z,Number(part.ohms)||330),scale=span/1.2;
+      g.scale.setScalar(scale);g.position.y=.14+.24*scale;g.rotation.y=angle;buildPartMeshes(g,kind);
+    }else{
+      const g=led(x,z),oldLeads=g.children.slice(0,2);
+      for(const lead of oldLeads){meshes=meshes.filter(o=>o!==lead);clearCircuit(lead);g.remove(lead);}
+      // Keep the LED body round while fitting both leads into their exact holes.
+      for(const body of g.children){body.position.multiplyScalar(.65);body.scale.setScalar(.65);}
+      g.position.y=.14;g.rotation.y=angle;
+      for(const sx of [-span/2,span/2])line([[sx,0,0],[sx,.22,0],[Math.sign(sx)*.07,.31,0]],C.silver,.018,g,'led');
+      // The cathode-side flat is a physical polarity cue, visible on close-up.
+      box(.025,.025,.17,mat(0xb64e39),g,[.155,.313,0],'led');
+      buildPartMeshes(g,kind);
+    }
+  }
+  function buildTargetEndpoints(id){
+    const part=String(id).replace(/^component:/,'');if(['led','resistor'].includes(part)&&buildState.parts?.[part])return[buildState.parts[part].a,buildState.parts[part].b];
+    const selectedWire=buildState.wires?.find(w=>w&&(w.id===id||'wire:'+w.id===id));if(selectedWire)return[selectedWire.from,selectedWire.to];
+    return[id];
+  }
+  function setBuildHighlight(targets=[]){
+    if(!buildMode)return;
+    clearCircuit(buildHighlights);buildHighlights.clear();
+    buildHighlightTargets=[...new Set(Array.isArray(targets)?targets:[])];
+    for(const id of buildHighlightTargets){
+      for(const endpoint of buildTargetEndpoints(id)){const p=buildEndpointPosition(endpoint);if(!p)continue;
+        const ring=mesh(new THREE.TorusGeometry(.115,.018,6,28),mat(0xd97f40,{depthTest:false,depthWrite:false}),buildHighlights,[p[0],p[1]+.04,p[2]]);ring.rotation.x=-Math.PI/2;ring.renderOrder=40;ring.castShadow=false;
+      }
+    }
+    cameraAnimatingUntil=performance.now()+250;
+  }
+  function focusBuildTargets(targets=[]){
+    if(!buildMode)return{resolved:[],unresolved:[]};
+    setBuildHighlight(targets);const bounds=new THREE.Box3(),resolved=[],unresolved=[];
+    for(const id of buildHighlightTargets){const points=buildTargetEndpoints(id).map(buildEndpointPosition).filter(Boolean);if(!points.length){unresolved.push(id);continue;}resolved.push(id);for(const p of points)bounds.expandByPoint(new THREE.Vector3(...p));}
+    if(!resolved.length){clearFocus();return{resolved,unresolved};}
+    cancelGesture(true);const prior=focusState?.prior||{yaw:targetRotation,zoom:zoomLevel};removeFocusVisuals();
+    bounds.expandByVector(new THREE.Vector3(.5,.75,.6));const size=bounds.getSize(new THREE.Vector3());
+    if(size.x<2.5)bounds.expandByVector(new THREE.Vector3((2.5-size.x)/2,0,0));if(size.z<2.4)bounds.expandByVector(new THREE.Vector3(0,0,(2.4-size.z)/2));
+    focusState={prior,bounds,units:[],resolved,view:'build'};targetDirection.set(3,19,8);targetRotation=-.04;zoomLevel=1;
+    if(reducedMotion.matches){rotation=targetRotation;viewDirection.copy(targetDirection);framingReady=false;fittedHeight=0;}
+    cameraAnimatingUntil=performance.now()+(reducedMotion.matches?0:1000);container.dataset.focusTargets=JSON.stringify(resolved);container.dataset.focusActive='true';callbacks.onFocusChange?.(true,{resolved,unresolved});frameCamera();return{resolved,unresolved};
+  }
+  function setBuildState(next={}){
+    if(!buildMode)return;
+    clearFocus();cancelGesture(true);running=false;transition=null;elapsed=0;
+    buildState={parts:next.parts||{},wires:Array.isArray(next.wires)?next.wires:[],interval:Math.max(100,Math.min(1500,Number(next.interval)||500))};
+    meshes=meshes.filter(m=>!isChildOf(m,circuit));clearCircuit();world.remove(circuit);circuit=new THREE.Group();world.add(circuit);anim={};
+    board.position.set(-2.25,0,0);lesson='build';container.dataset.lesson='build';container.dataset.transitioning='false';container.dataset.buildRunning='false';
+    breadboard();buildComponent('led',buildState.parts.led);buildComponent('resistor',buildState.parts.resistor);
+    for(const w of buildState.wires){if(!w||typeof w!=='object')continue;const a=buildEndpointPosition(w.from),b=buildEndpointPosition(w.to);if(!a||!b)continue;
+      const color=/^#[\da-f]{6}$/i.test(w.color||'')?w.color:'#c67c4d',o=wire(a,b,color);o.userData.part='build-wire';o.userData.buildWire=w.id;meshes.push(o);
+      // Small sockets show that the jumper actually terminates at each contact.
+      for(const p of [a,b])box(.065,.13,.065,black,circuit,[p[0],p[1]+.04,p[2]]);
+    }
+    labels.forEach(l=>l.el.remove());labels=[];setBuildHighlight(buildHighlightTargets);captureBounds();resize();cameraAnimatingUntil=performance.now()+450;
+  }
+  function buildHit(e,h=hit(e)){
+    if(h?.object.userData.pin){const o=h.object;return'pin:'+(o.userData.pin==='GND'&&o.userData.pinCluster?.startsWith('-1:')?'GND2':o.userData.pin);}
+    const r=renderer.domElement.getBoundingClientRect();if(!r.width||!r.height)return null;
+    mouse.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);world.updateMatrixWorld(true);camera.updateMatrixWorld(true);rays.setFromCamera(mouse,camera);
+    const ray=rays.ray.clone().applyMatrix4(new THREE.Matrix4().copy(world.matrixWorld).invert()),p=ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),-.14),new THREE.Vector3());if(!p)return null;
+    let best=null,distance=.105;
+    for(const col of 'abcdefghij')for(let row=1;row<=30;row++){const id='bb:'+col+row,q=buildEndpointPosition(id),d=Math.hypot(p.x-q[0],p.z-q[2]);if(d<distance){distance=d;best=id;}}
+    for(const side of ['L+','L-','R+','R-'])for(let i=1;i<=25;i++){const id='rail:'+side+':'+i,q=buildEndpointPosition(id),d=Math.hypot(p.x-q[0],p.z-q[2]);if(d<distance){distance=d;best=id;}}
+    return best;
+  }
   function externalSetup(id){
     meshes=meshes.filter(m=>!isChildOf(m,circuit));
     clearCircuit();world.remove(circuit);circuit=new THREE.Group();world.add(circuit);anim={};
@@ -487,6 +581,7 @@ export function createScene(container, callbacks = {}) {
     return rays.intersectObjects(meshes,false).find(h=>h.object.visible)||null;
   }
   function interaction(h,e={}){
+    if(buildMode)return null;
     if(!h||focusState||e.shiftKey||e.altKey)return null;const part=h.object.userData.part;
     if(lesson==='board'&&part==='en')return{kind:'tap',part,action:'reset'};
     if(!isChildOf(h.object,circuit))return null;
@@ -526,7 +621,7 @@ export function createScene(container, callbacks = {}) {
     const step={blink:25,potentiometer:25,rgb:100/12,distance:25,sound:12.5,motor:25,temperature:12.5,servo:25,stepper:12.5,plant:25}[g.action];
     if(step!==undefined)emit('value',{value:g.action==='plant'?Math.min(100,value+step):(value+step>100.01?0:value+step),part:g.part});
   }
-  function hoverAt(e){const h=hit(e),part=h?.object.userData.part||null;hover=part;const a=interaction(h,e);renderer.domElement.style.cursor=a?.kind==='drag'?'ew-resize':part?'pointer':'grab';callbacks.onHover?.(part,{x:e.clientX,y:e.clientY});}
+  function hoverAt(e){const h=hit(e),part=h?.object.userData.part||null;hover=part;if(buildMode){const endpoint=buildHit(e,h);renderer.domElement.style.cursor=endpoint||h?.object.userData.buildPart||h?.object.userData.buildWire?'pointer':'grab';callbacks.onBuildHover?.(endpoint,{x:e.clientX,y:e.clientY});return;}const a=interaction(h,e);renderer.domElement.style.cursor=a?.kind==='drag'?'ew-resize':part?'pointer':'grab';callbacks.onHover?.(part,{x:e.clientX,y:e.clientY});}
   function cancelGesture(silent=false){releaseAction(silent===true);if(silent===true)pressed=false;pointerDown=null;pointers.clear();pinchDist=0;callbacks.onHover?.(null,{x:0,y:0});}
   function down(e){
     if((e.button!==undefined&&e.button!==0)||transition)return;
@@ -557,7 +652,10 @@ export function createScene(container, callbacks = {}) {
     if(pointerDown?.id===e.pointerId){
       const clicked=e.type==='pointerup'&&!pointerDown.moved;
       if(clicked&&gesture&&gesture.kind!=='hold')tapAction(gesture);
-      else if(clicked&&!gesture){const part=pointerDown.hit?.object.userData.part;if(part)callbacks.onInspect?.(part);}
+      else if(clicked&&!gesture){
+        if(buildMode){const o=pointerDown.hit?.object;if(o?.userData.buildPart)callbacks.onBuildPart?.(o.userData.buildPart);else if(o?.userData.buildWire)callbacks.onBuildWire?.(o.userData.buildWire);else{const endpoint=buildHit(e,pointerDown.hit);if(endpoint)callbacks.onBuildEndpoint?.(endpoint);}}
+        else{const part=pointerDown.hit?.object.userData.part;if(part)callbacks.onInspect?.(part);}
+      }
       releaseAction();pointerDown=null;
     }
     // A remaining finger after a pinch starts a fresh orbit, never a component click.
@@ -565,7 +663,7 @@ export function createScene(container, callbacks = {}) {
     renderer.domElement.style.cursor='grab';
   }
   function lost(e){if(pointers.has(e.pointerId))up({...e,type:'pointercancel',pointerId:e.pointerId});}
-  function leave(){if(!pointers.size){hover=null;callbacks.onHover?.(null,{x:0,y:0});}}
+  function leave(){if(!pointers.size){hover=null;callbacks.onHover?.(null,{x:0,y:0});if(buildMode)callbacks.onBuildHover?.(null,{x:0,y:0});}}
   function wheel(e){e.preventDefault();clearFocus();zoomLevel=THREE.MathUtils.clamp(zoomLevel*Math.exp(-e.deltaY*.0007),MIN_ZOOM,MAX_ZOOM);frameCamera();}
   function turn(d){clearFocus();targetRotation=THREE.MathUtils.clamp(targetRotation+d,DEFAULT_YAW-Math.PI*.85,DEFAULT_YAW+Math.PI*.85);}
   function key(e){if(['ArrowLeft','ArrowRight','+','-','0'].includes(e.key)){e.preventDefault();clearFocus();if(e.key==='ArrowLeft')turn(-.15);if(e.key==='ArrowRight')turn(.15);if(e.key==='+'){zoomLevel=Math.min(MAX_ZOOM,zoomLevel+.05);frameCamera();}if(e.key==='-'){zoomLevel=Math.max(MIN_ZOOM,zoomLevel-.05);frameCamera();}if(e.key==='0')reset();}}
@@ -585,6 +683,7 @@ export function createScene(container, callbacks = {}) {
     container.dataset.transitioning='true';
   }
   function switchLesson(id){
+    if(buildMode)return;
     if(id===lesson)return;
     clearFocus();cancelGesture(true);running=false;pressed=false;lesson=id;container.dataset.lesson=id;zoomLevel=1;
     if(reducedMotion.matches){assemble(id,false);return;}
@@ -614,7 +713,7 @@ export function createScene(container, callbacks = {}) {
     rotation+=(targetRotation-rotation)*.15;world.rotation.y=rotation;world.rotation.x=0;animateAssembly(now);frameCamera();
     const normalized=THREE.MathUtils.clamp(value/100,0,1);let brightness=0;
     if(running&&!transition){
-      brightness=lesson==='blink'?(Math.floor(elapsed*1000/(100+normalized*1400))%2===0?1:0):['button','wifi'].includes(lesson)?(pressed?1:0):lesson==='light'?(normalized<1200/4095?1:0):['force','potentiometer'].includes(lesson)?normalized:1;
+      brightness=buildMode?(Math.floor(elapsed*1000/buildState.interval)%2===0?1:0):lesson==='blink'?(Math.floor(elapsed*1000/(100+normalized*1400))%2===0?1:0):['button','wifi'].includes(lesson)?(pressed?1:0):lesson==='light'?(normalized<1200/4095?1:0):['force','potentiometer'].includes(lesson)?normalized:1;
       // External lesson LEDs do not imply that a particular built-in LED exists.
       onboardLED.emissiveIntensity=.08;
       if(anim.rotor)anim.rotor.rotation.z+=dt*normalized*30;
@@ -636,11 +735,13 @@ export function createScene(container, callbacks = {}) {
     positionFocusLabels();
     renderer.render(scene,camera);
   }
-  externalSetup('board');resize();frame=requestAnimationFrame(tick);callbacks.onReady?.();
+  externalSetup('board');resize();if(buildMode)setBuildState(buildState);frame=requestAnimationFrame(tick);callbacks.onReady?.();
   return {
     setLesson:switchLesson,
+    setBuildState,setBuildHighlight,focusBuildTargets,
+    setBuildRunning(v){if(!buildMode)return;running=!!v;elapsed=0;if(!running)cancelGesture(true);container.dataset.buildRunning=String(running);},
     setRunning(v){running=!!v;if(!running)cancelGesture(true);elapsed=0;},setValue(v){value=Number(v)||0;},setPressed(v){pressed=!!v;},
-    setLabels(v){labelsVisible=!!v;},setFlow(v){flow=!!v;},focus,clearFocus,reset,
+    setLabels(v){labelsVisible=!!v;},setFlow(v){flow=buildMode?false:!!v;},focus,clearFocus,reset,
     rotate:turn,zoom(d){clearFocus();zoomLevel=THREE.MathUtils.clamp(zoomLevel+d,MIN_ZOOM,MAX_ZOOM);frameCamera();},
     dispose(){alive=false;clearFocus();cancelGesture(true);cancelAnimationFrame(frame);observer.disconnect();window.removeEventListener('blur',cancelGesture);for(const[name,fn]of Object.entries(listeners))renderer.domElement.removeEventListener(name==='keyDown'?'keydown':name,fn);transition=null;renderer.dispose();renderer.forceContextLoss();geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());textures.forEach(t=>t.dispose());labelsEl.remove();focusLabels.remove();renderer.domElement.remove();}
   };

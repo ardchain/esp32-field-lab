@@ -175,3 +175,12 @@
 @media (max-width:359px) {
   .wordmark .brand-lab,.wordmark .brand-slash { display:none; }
 }
+
+/* Assembly entry and the Blink control-to-code connection. */
+.top-navigation { gap:20px; }
+#build-root { flex:1 1 0;min-width:0;min-height:0; }
+.build-launch { display:flex;align-items:center;justify-content:space-between;width:100%;border:1px solid var(--line);padding:12px 14px;margin-top:12px;min-height:44px;font-size:12px;color:var(--accent-dark); }
+.build-launch:hover { background:#c8754e0b; }
+.control-constant { font:9px 'JetBrains Mono',monospace;color:var(--muted);margin-left:8px; }
+.control-note { color:var(--muted);font-size:11px;line-height:1.5;margin:8px 0 0; }
+@media (max-width:1100px) and (min-width:761px) { .top-navigation {gap:12px;font-size:10px;} .topbar {gap:16px;} }
