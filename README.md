@@ -44,7 +44,9 @@ Choose **Show the connections**, or select a **Pinout** row, for a guided close-
 
 ## Build a circuit
 
-Open **Build** in the navigation and choose a project. Each starts with an ESP32 and an empty breadboard. Place components from the tray, then choose **Wire** and select two contacts. Drag a placed component to move it, or select it and choose a new hole. **Delete** and the keyboard Delete/Backspace keys remove parts or wires; Undo restores them. Scroll, pinch or use the separate **Zoom** slider to change the view. Contact selectors provide an alternative to pointing at small holes.
+Open **Build** in the navigation and choose a project. **Guided build** starts by showing the hidden connections inside the breadboard: five-hole strips, the center gap and the power rails. Each following step highlights a part or connection and explains its purpose. Click a suggested component's ghost to place its entire footprint, or use **Do this step**. **Next** moves to the following explanation. The guide follows your actual layout, including valid alternative arrangements; it preserves saved circuits.
+
+Use **Free build** to explore directly. Place components from the tray, then choose **Wire** and select two contacts. Drag a placed component to move it. Select a wire and drag either endpoint to reconnect it; its other end stays in place. An invalid drop preserves the original wire. Click a part or wire to select it; click the selected body again to remove it, then use **Undo** to restore it. The Delete tool and keyboard Delete/Backspace remain available. Scroll, pinch or use the **Zoom** slider to change the view. Contact selectors provide an alternative to pointing at small holes.
 
 | Project | Circuit and behavior |
 | --- | --- |
@@ -52,13 +54,13 @@ Open **Build** in the navigation and choose a project. Each starts with an ESP32
 | [Button](https://ardchain.github.io/esp32-field-lab/#build-button) | Wire a four-leg switch to GPIO18 and GND; pressing it reads LOW and lights the LED. |
 | [Potentiometer](https://ardchain.github.io/esp32-field-lab/#build-potentiometer) | Power a 10 kΩ potentiometer from 3.3 V; its wiper feeds GPIO34 and controls LED brightness. |
 
-![A button-controlled LED assembled and running in the Build workspace](docs/build.png)
+![Guided assembly reveals the shared breadboard strip between the resistor and LED](docs/build.png)
 
 **Check** evaluates connectivity, LED polarity, current limiting, occupied holes and power shorts. Valid layouts may use different rows, wire colors, power rails or a resistor on either side of the LED. Each breadboard row connects a–e separately from f–j; the four power rails are continuous and independent. Each contact holds one lead or jumper. The two ESP32 ground pins share a net but are separate physical contacts.
 
 In Wire mode, an occupied terminal resolves to a free contact on the same conducting connection; the preview shows the actual endpoint before you connect it. This follows breadboard strips and existing wires, never a resistor or LED. Already connected endpoints do not add duplicate wires. Guided wiring advances to the next connection after each completed wire.
 
-Run is available after a successful check. Editing or restoring a draft stops playback and requires a fresh check. Hints show proposed components or wires at their actual positions, with short explanations beside the target. Undo preserves the previous edit, including a reset. Each project has its own saved draft; assembly completion is separate from lesson quizzes.
+Run is available after a successful check. Editing or restoring a draft stops playback and requires a fresh check. Hints show proposed components or wires at their actual positions, with short explanations beside the target. If a wire feeds the LED directly and bypasses the resistor, a repair guide identifies the wire end to move and the remaining connection. Each repair requires an explicit action and can be undone. Undo preserves the previous edit, including a reset. Each project has its own saved draft; assembly completion is separate from lesson quizzes.
 
 These are connectivity checkers for the three supplied projects, not an arbitrary electrical solver or C++ compiler. Each checked circuit drives its matching demonstration. The button models its two permanently connected leg pairs and its pressed state. The potentiometer models distinct track ends and a wiper, including reversed outer connections. Lesson scenes retain their illustrative wires; Build mode attaches its wires to the selected contacts.
 
@@ -72,6 +74,7 @@ These are connectivity checkers for the three supplied projects, not an arbitrar
 | `dist/build.js`, `dist/build.css` | Assembly editor, hints, validation feedback and draft persistence |
 | `dist/build-circuit.js` | Breadboard nets, component footprints, occupancy and project circuit rules |
 | `dist/build-projects.js` | Assembly project catalog, example placements, controls and sketches |
+| `dist/build-walkthroughs.js` | Guided assembly explanations and connection steps that follow the learner's actual layout |
 | `dist/lessons.js` | Lesson content, Arduino sketches and component reference |
 | `dist/guides.js` | Step-by-step visual connection tours |
 | `dist/diagrams.js` | Circuit diagrams and breadboard connectivity |

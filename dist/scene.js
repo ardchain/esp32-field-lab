@@ -18,7 +18,7 @@ export function createScene(container, callbacks = {}) {
     fallback.style.cssText='height:100%;display:grid;place-content:center;text-align:center;padding:28px;color:#284944;font:14px/1.6 sans-serif';
     fallback.innerHTML='<strong>Explore the ESP32</strong><span>The interactive board needs WebGL.<br>Try a recent version of Chrome, Edge, Firefox or Safari.<br>You can still read every lesson and use the pin guide.</span>';
     container.append(fallback); callbacks.onReady?.();
-    return {setLesson:noop,setRunning:noop,setValue:noop,setPressed:noop,setLabels:noop,setFlow:noop,setBuildState:noop,setBuildRunning:noop,setBuildHighlight:noop,setBuildTool:noop,setBuildGhost:noop,setBuildZoom:noop,getBuildZoom:()=>1,projectBuildEndpoint:()=>null,setBuildInputs:noop,setBuildSimulation:noop,focusBuildTargets:()=>({resolved:[],unresolved:[]}),reset:noop,rotate:noop,zoom:noop,focus:({targets=[]}={})=>({resolved:[],unresolved:targets}),clearFocus:noop,dispose:()=>fallback.remove()};
+    return {setLesson:noop,setRunning:noop,setValue:noop,setPressed:noop,setLabels:noop,setFlow:noop,setBuildState:noop,setBuildRunning:noop,setBuildHighlight:noop,setBuildSelection:noop,setBuildConnections:noop,setBuildWirePending:noop,setBuildTool:noop,setBuildGhost:noop,setBuildZoom:noop,getBuildZoom:()=>1,projectBuildEndpoint:()=>null,setBuildInputs:noop,setBuildSimulation:noop,focusBuildTargets:()=>({resolved:[],unresolved:[]}),reset:noop,rotate:noop,zoom:noop,focus:({targets=[]}={})=>({resolved:[],unresolved:targets}),clearFocus:noop,dispose:()=>fallback.remove()};
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
   renderer.setClearColor(0xf4f3ed,0);
@@ -46,6 +46,8 @@ export function createScene(container, callbacks = {}) {
   let buildState={project:'blink',parts:{led:null,resistor:null},wires:[],interval:500},buildHighlightTargets=[],buildStateKey='',buildGhostKey='',buildTool='select',buildSimulation=null;
   const buildHighlights=new THREE.Group();world.add(buildHighlights);
   const buildGhosts=new THREE.Group();world.add(buildGhosts);
+  const buildWireHandles=new THREE.Group(),buildCopper=new THREE.Group();world.add(buildWireHandles,buildCopper);
+  let buildSelection=null,buildSelectionKey='',buildConnectionKey='',buildConnectionTargets=[],buildGhostPreview=null,buildWirePending=false;
   const buildWireMaterials=new Map(),buildWireShadows=new Map(),buildWireClones=new Set();let buildWireTransparent=false;
   const DEFAULT_YAW=-.13, MIN_ZOOM=buildMode?.6:.8, MAX_ZOOM=buildMode?3:1.12;
   let rotation=DEFAULT_YAW, targetRotation=DEFAULT_YAW, zoomLevel=1, alive=true, frame=0, last=performance.now(), elapsed=0;
@@ -57,7 +59,7 @@ export function createScene(container, callbacks = {}) {
   const viewDirection=new THREE.Vector3(7,13,10), framePoint=new THREE.Vector3(), frameCenter=new THREE.Vector3(), cameraCenter=new THREE.Vector3();let fittedHeight=0, framingReady=false;
   container.dataset.transitioning='false';container.dataset.lesson='board';
   const rays=new THREE.Raycaster(), mouse=new THREE.Vector2(), temp=new THREE.Vector3();
-  let hover=null, pointerDown=null, pointers=new Map(), pinchDist=0, lastPinch=0,buildDrag=null;
+  let hover=null, pointerDown=null, pointers=new Map(), pinchDist=0, lastPinch=0,buildDrag=null,buildWireDrag=null;
   const materials=new Set(), geometries=new Set(), textures=new Set();
   const light=new THREE.DirectionalLight(0xfff9ef,2.5);light.position.set(-5,12,7);light.castShadow=true;
   light.shadow.mapSize.set(2048,2048);Object.assign(light.shadow.camera,{left:-10,right:10,top:10,bottom:-10,near:.1,far:40});
@@ -297,8 +299,35 @@ export function createScene(container, callbacks = {}) {
     }
     cameraAnimatingUntil=performance.now()+250;
   }
+  function refreshBuildWireHandles(){
+    clearCircuit(buildWireHandles);buildWireHandles.clear();
+    const wire=buildState.wires.find(w=>w?.id===buildSelection?.wire);container.dataset.buildSelectedWire=wire?.id||'';
+    if(!wire||running||buildTool!=='select')return;
+    for(const end of ['from','to']){const p=buildEndpointPosition(wire[end]);if(!p)continue;const g=new THREE.Group();g.position.set(p[0],p[1]+.065,p[2]);g.userData={buildWireEnd:{id:wire.id,end,anchor:wire[end]}};buildWireHandles.add(g);
+      const material=mat(0xe58a38,{depthTest:false,depthWrite:false,emissive:0xe58a38,emissiveIntensity:.25}),ring=mesh(new THREE.TorusGeometry(.13,.025,8,32),material,g,[0,0,0]);ring.rotation.x=-Math.PI/2;
+      mesh(new THREE.SphereGeometry(.052,12,8),mat(0xfff8e7,{depthTest:false,depthWrite:false}),g,[0,.015,0]);g.traverse(o=>{if(o.isMesh){o.castShadow=false;o.receiveShadow=false;o.renderOrder=45;}});
+    }
+    cameraAnimatingUntil=performance.now()+250;
+  }
+  function setBuildSelection(selection){
+    if(!buildMode)return;const key=JSON.stringify(selection||null);if(key===buildSelectionKey)return;buildSelectionKey=key;buildSelection=selection?{...selection}:null;cancelBuildWireDrag();refreshBuildWireHandles();
+  }
+  function buildWireHandleHit(e){
+    if(!buildMode||running||buildTool!=='select'||!buildWireHandles.children.length)return null;
+    const r=renderer.domElement.getBoundingClientRect();world.updateMatrixWorld(true);camera.updateMatrixWorld(true);let found=null,distance=e.pointerType==='touch'?25:18;
+    for(const handle of buildWireHandles.children){const p=handle.getWorldPosition(new THREE.Vector3()).project(camera);if(Math.abs(p.x)>1||Math.abs(p.y)>1||p.z<-1||p.z>1)continue;const d=Math.hypot(e.clientX-r.left-(p.x*.5+.5)*r.width,e.clientY-r.top-(-p.y*.5+.5)*r.height);if(d<distance){distance=d;found=handle.userData.buildWireEnd;}}
+    return found;
+  }
+  function setBuildConnections(targets=[]){
+    if(!buildMode)return;buildConnectionTargets=[...new Set(Array.isArray(targets)?targets:[])];const strips=new Map();
+    for(const target of buildConnectionTargets)for(const id of buildTargetEndpoints(target)){const hole=/^bb:([a-j])([1-9]|[12]\d|30)$/.exec(String(id)),rail=/^rail:([LR][+-]):(?:[1-9]|1\d|2[0-5])$/.exec(String(id));if(hole){const left=hole[1]<='e',row=hole[2],key='row:'+row+':'+(left?'a-e':'f-j');strips.set(key,{a:'bb:'+(left?'a':'f')+row,b:'bb:'+(left?'e':'j')+row});}else if(rail)strips.set('rail:'+rail[1],{a:'rail:'+rail[1]+':1',b:'rail:'+rail[1]+':25'});}
+    const key=JSON.stringify([...strips]);if(key===buildConnectionKey)return;buildConnectionKey=key;clearCircuit(buildCopper);buildCopper.clear();container.dataset.buildCopperStrips=JSON.stringify([...strips.keys()]);
+    for(const [id,strip]of strips){const a=buildEndpointPosition(strip.a),b=buildEndpointPosition(strip.b);if(!a||!b)continue;const band=box(Math.abs(b[0]-a[0])+.14,.006,Math.abs(b[2]-a[2])+.14,mat(0x2c9ca1,{transparent:true,opacity:.26,depthWrite:false}),buildCopper,[(a[0]+b[0])/2,.132,(a[2]+b[2])/2]);band.userData.buildCopper=id;band.castShadow=false;band.receiveShadow=false;band.renderOrder=2;}
+    cameraAnimatingUntil=performance.now()+250;
+  }
   function setBuildGhost(preview){
     if(!buildMode)return;const key=preview?JSON.stringify(preview):'';if(key===buildGhostKey)return;buildGhostKey=key;
+    buildGhostPreview=preview?{...preview}:null;
     clearCircuit(buildGhosts);buildGhosts.clear();container.dataset.buildGhost=preview?.kind||'';
     if(!preview)return;
     const savedCircuit=circuit,savedAnim=anim,savedMeshes=meshes;circuit=buildGhosts;anim={};meshes=[];
@@ -358,11 +387,20 @@ export function createScene(container, callbacks = {}) {
       // Small sockets show that the jumper actually terminates at each contact.
       for(const p of [a,b])box(.065,.13,.065,black,circuit,[p[0],p[1]+.04,p[2]]);
     }
-    labels.forEach(l=>l.el.remove());labels=[];refreshBuildWireMaterials();setBuildHighlight(buildHighlightTargets);captureBounds();resize();cameraAnimatingUntil=performance.now()+450;
+    labels.forEach(l=>l.el.remove());labels=[];refreshBuildWireMaterials();refreshBuildWireHandles();setBuildConnections(buildConnectionTargets);setBuildHighlight(buildHighlightTargets);captureBounds();resize();cameraAnimatingUntil=performance.now()+450;
   }
   function buildHit(e,h=hit(e)){
     if(h?.object.userData.pin){const o=h.object;return'pin:'+(o.userData.pin==='GND'&&o.userData.pinCluster?.startsWith('-1:')?'GND2':o.userData.pin);}
     return nearestBuildHole(buildPlanePoint(e));
+  }
+  function buildDragEndpoint(e){
+    const exact=buildHit(e,hit(e,true));if(exact)return exact;
+    const r=renderer.domElement.getBoundingClientRect();let nearest=null,distance=e.pointerType==='touch'?20:10;
+    const endpoints=[...new Set([...PINS_LEFT,...PINS_RIGHT].map(pin=>'pin:'+(({VP:'36',VN:'39',TX0:'1',RX0:'3',RX2:'16',TX2:'17'})[pin]||pin)))];endpoints.push('pin:GND2');
+    for(const col of 'abcdefghij')for(let row=1;row<=30;row++)endpoints.push('bb:'+col+row);for(const rail of ['L+','L-','R+','R-'])for(let row=1;row<=25;row++)endpoints.push('rail:'+rail+':'+row);
+    world.updateMatrixWorld(true);camera.updateMatrixWorld(true);
+    for(const id of endpoints){const position=buildEndpointPosition(id);if(!position)continue;const p=new THREE.Vector3(...position).applyMatrix4(world.matrixWorld).project(camera);if(Math.abs(p.x)>1||Math.abs(p.y)>1)continue;const d=Math.hypot(e.clientX-r.left-(p.x*.5+.5)*r.width,e.clientY-r.top-(-p.y*.5+.5)*r.height);if(d<distance){distance=d;nearest=id;}}
+    return nearest;
   }
   function buildPlanePoint(e){
     const r=renderer.domElement.getBoundingClientRect();if(!r.width||!r.height)return null;
@@ -524,7 +562,9 @@ export function createScene(container, callbacks = {}) {
     if(lesson==='distance')frameBounds.max.z=Math.max(frameBounds.max.z,3.05);
   }
   function frameCamera(){
-    if(!frameBounds)return;
+    // The grabbed contact must stay under the pointer while the opening/focus
+    // animation is still settling. Resume its existing tween after the drop.
+    if(!frameBounds||buildDragLocksView())return;
     const bounds=focusState?.bounds||frameBounds;
     const yawMatrix=new THREE.Matrix4().makeRotationY(rotation), aspect=viewWidth/viewHeight;
     viewDirection.lerp(targetDirection,reducedMotion.matches?1:.14);
@@ -540,6 +580,7 @@ export function createScene(container, callbacks = {}) {
     const needed=Math.max(Math.abs(minY),Math.abs(maxY),Math.abs(minX)/aspect,Math.abs(maxX)/aspect)*2*1.18/zoomLevel;
     fittedHeight=fittedHeight?Math.max(needed,fittedHeight+(needed-fittedHeight)*.18):needed;const height=fittedHeight;
     camera.left=-height*aspect/2;camera.right=height*aspect/2;camera.top=height/2;camera.bottom=-height/2;camera.updateProjectionMatrix();
+    for(const handle of buildWireHandles.children)handle.scale.setScalar(THREE.MathUtils.clamp(height/viewHeight*11/.13,.25,3));
   }
   function canonicalToken(token){
     const [kind,raw='',qualifier,...extra]=String(token).split(':');if(!['pin','part','component'].includes(kind)||extra.length)return null;
@@ -645,13 +686,14 @@ export function createScene(container, callbacks = {}) {
   }
   function resize(){viewWidth=Math.max(1,container.clientWidth||600);viewHeight=Math.max(1,container.clientHeight||500);renderer.setSize(viewWidth,viewHeight,false);frameCamera();}
   const observer=new ResizeObserver(resize);observer.observe(container);
-  function hit(e){
+  function hit(e,buildContactsOnly=false){
     if(transition)return null;const r=renderer.domElement.getBoundingClientRect();if(!r.width||!r.height)return null;
     mouse.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);
     world.updateMatrixWorld(true);camera.updateMatrixWorld(true);rays.setFromCamera(mouse,camera);
-    const targets=buildMode&&buildTool==='wire'&&!running?meshes.filter(o=>!o.userData.buildPart&&!o.userData.buildWire):meshes;
+    const targets=buildMode&&(buildTool==='wire'||buildContactsOnly)&&!running?meshes.filter(o=>!o.userData.buildPart&&(!(buildContactsOnly||buildWirePending)||!o.userData.buildWire)):meshes;
     return rays.intersectObjects(targets,false).find(h=>h.object.visible)||null;
   }
+  function buildGhostHit(){if(!buildMode||running||!buildGhostPreview||buildGhostPreview.kind==='wire'||['wire','delete'].includes(buildTool))return null;return rays.intersectObjects(buildGhosts.children,true).some(h=>h.object.visible)?{...buildGhostPreview}:null;}
   function interaction(h,e={}){
     if(buildMode){if(!running||!h)return null;const part=h.object.userData.buildPart;if(part==='button')return{kind:'hold',part,action:'button'};if(part==='potentiometer')return{kind:'drag',part,action:'potentiometer'};return null;}
     if(!h||focusState||e.shiftKey||e.altKey)return null;const part=h.object.userData.part;
@@ -693,17 +735,20 @@ export function createScene(container, callbacks = {}) {
     const step={blink:25,potentiometer:25,rgb:100/12,distance:25,sound:12.5,motor:25,temperature:12.5,servo:25,stepper:12.5,plant:25}[g.action];
     if(step!==undefined)emit('value',{value:g.action==='plant'?Math.min(100,value+step):(value+step>100.01?0:value+step),part:g.part});
   }
-  function hoverAt(e){const h=hit(e),part=h?.object.userData.part||null;hover=part;if(buildMode){const endpoint=buildHit(e,h),a=interaction(h,e);renderer.domElement.style.cursor=a?.kind==='drag'?'ew-resize':buildTool==='delete'&&(h?.object.userData.buildPart||h?.object.userData.buildWire)?'not-allowed':buildTool==='select'&&!running&&h?.object.userData.buildPart?'move':endpoint||h?.object.userData.buildPart||h?.object.userData.buildWire?'pointer':'grab';callbacks.onBuildHover?.(endpoint,{x:e.clientX,y:e.clientY});return;}const a=interaction(h,e);renderer.domElement.style.cursor=a?.kind==='drag'?'ew-resize':part?'pointer':'grab';callbacks.onHover?.(part,{x:e.clientX,y:e.clientY});}
+  function hoverAt(e){const h=hit(e),part=h?.object.userData.part||null;hover=part;if(buildMode){const handle=buildWireHandleHit(e),ghost=handle?null:buildGhostHit();if(ghost){renderer.domElement.style.cursor=ghost.invalid?'not-allowed':'copy';return;}const endpoint=handle?.anchor||buildHit(e,buildTool==='wire'?hit(e,true):h),a=interaction(h,e);renderer.domElement.style.cursor=handle?'grab':a?.kind==='drag'?'ew-resize':buildTool==='delete'&&(h?.object.userData.buildPart||h?.object.userData.buildWire)?'not-allowed':buildTool==='select'&&!running&&h?.object.userData.buildPart?'move':endpoint||h?.object.userData.buildPart||h?.object.userData.buildWire?'pointer':'grab';callbacks.onBuildHover?.(endpoint,{x:e.clientX,y:e.clientY});return;}const a=interaction(h,e);renderer.domElement.style.cursor=a?.kind==='drag'?'ew-resize':part?'pointer':'grab';callbacks.onHover?.(part,{x:e.clientX,y:e.clientY});}
   function cancelBuildDrag(){const old=buildDrag;buildDrag=null;if(old?.started)callbacks.onBuildDrag?.({kind:old.kind,phase:'cancel',anchor:null});}
-  function cancelGesture(silent=false){cancelBuildDrag();releaseAction(silent===true);if(silent===true)pressed=false;pointerDown=null;pointers.clear();pinchDist=0;callbacks.onHover?.(null,{x:0,y:0});}
+  function cancelBuildWireDrag(){const old=buildWireDrag;buildWireDrag=null;if(old?.started)callbacks.onBuildWireDrag?.({id:old.id,end:old.end,phase:'cancel',anchor:null});}
+  function buildDragLocksView(){return buildMode&&pointers.size===1&&!!(buildDrag||buildWireDrag);}
+  function cancelGesture(silent=false){cancelBuildDrag();cancelBuildWireDrag();releaseAction(silent===true);if(silent===true)pressed=false;pointerDown=null;pointers.clear();pinchDist=0;callbacks.onHover?.(null,{x:0,y:0});}
   function down(e){
     if((e.button!==undefined&&e.button!==0)||transition)return;
     pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});try{renderer.domElement.setPointerCapture(e.pointerId);}catch{}
-    if(pointers.size>1){if(!buildMode)clearFocus();cancelBuildDrag();releaseAction();pointerDown=null;const[a,b]=[...pointers.values()];pinchDist=Math.hypot(a.x-b.x,a.y-b.y);lastPinch=zoomLevel;return;}
-    const h=hit(e),a=interaction(h,e);
-    pointerDown={id:e.pointerId,x:e.clientX,y:e.clientY,startX:e.clientX,startY:e.clientY,moved:false,hit:h,inspect:!!(e.shiftKey||e.altKey)};
+    if(pointers.size>1){if(!buildMode)clearFocus();cancelBuildDrag();cancelBuildWireDrag();releaseAction();pointerDown=null;const[a,b]=[...pointers.values()];pinchDist=Math.hypot(a.x-b.x,a.y-b.y);lastPinch=zoomLevel;return;}
+    const h=hit(e),wireEnd=buildWireHandleHit(e),ghost=wireEnd?null:buildGhostHit(),a=wireEnd||ghost?null:interaction(h,e);
+    pointerDown={id:e.pointerId,x:e.clientX,y:e.clientY,startX:e.clientX,startY:e.clientY,moved:false,hit:h,ghost,inspect:!!(e.shiftKey||e.altKey)};
     gesture=a?{...a,startValue:value,startX:e.clientX,startY:e.clientY}:null;
-    if(buildMode&&!running&&buildTool==='select'&&h?.object.userData.buildPart){const kind=h.object.userData.buildPart,anchor=buildState.parts[kind]?.a,position=buildEndpointPosition(anchor),point=buildPlanePoint(e);if(position&&point)buildDrag={kind,anchor,position:new THREE.Vector3(...position),point,started:false};}
+    if(wireEnd)buildWireDrag={...wireEnd,started:false,target:wireEnd.anchor};
+    else if(!ghost&&buildMode&&!running&&buildTool==='select'&&h?.object.userData.buildPart){const kind=h.object.userData.buildPart,anchor=buildState.parts[kind]?.a,position=buildEndpointPosition(anchor),point=buildPlanePoint(e);if(position&&point)buildDrag={kind,anchor,position:new THREE.Vector3(...position),point,started:false};}
     if(gesture)beginAction(gesture,e);
     renderer.domElement.style.cursor=gesture?.kind==='drag'?'ew-resize':'grabbing';
   }
@@ -714,6 +759,7 @@ export function createScene(container, callbacks = {}) {
     if(!pointerDown||pointerDown.id!==e.pointerId)return;
     const dx=e.clientX-pointerDown.x,totalX=e.clientX-pointerDown.startX,totalY=e.clientY-pointerDown.startY;
     if(Math.hypot(totalX,totalY)>5)pointerDown.moved=true;
+    if(buildWireDrag&&pointerDown.moved){const drag=buildWireDrag;if(!drag.started){drag.started=true;callbacks.onBuildWireDrag?.({id:drag.id,end:drag.end,phase:'start',anchor:drag.anchor});}const anchor=buildDragEndpoint(e);drag.target=anchor;callbacks.onBuildWireDrag?.({id:drag.id,end:drag.end,phase:'move',anchor});renderer.domElement.style.cursor='grabbing';pointerDown.x=e.clientX;pointerDown.y=e.clientY;return;}
     if(buildDrag&&pointerDown.moved){const drag=buildDrag;if(!drag.started){drag.started=true;callbacks.onBuildDrag?.({kind:drag.kind,phase:'start',anchor:drag.anchor});}const point=buildPlanePoint(e),anchor=point?nearestBuildHole(point.sub(drag.point).add(drag.position),true):null;drag.target=anchor;callbacks.onBuildDrag?.({kind:drag.kind,phase:'move',anchor});renderer.domElement.style.cursor='move';pointerDown.x=e.clientX;pointerDown.y=e.clientY;return;}
     if(gesture?.kind==='drag'&&pointerDown.moved){emit('value',{value:gesture.startValue+totalX/Math.max(140,viewWidth*.35)*100,part:gesture.part});}
     else if(gesture?.action==='force'){emit('value',{value:e.pointerType==='pen'&&e.pressure>0?e.pressure*100:80-totalY*.7,part:gesture.part});}
@@ -725,12 +771,14 @@ export function createScene(container, callbacks = {}) {
     const had=pointers.has(e.pointerId);pointers.delete(e.pointerId);
     if(!had)return;
     if(pointerDown?.id===e.pointerId){
+      if(buildWireDrag){const drag=buildWireDrag;buildWireDrag=null;pointerDown=null;if(drag.started)callbacks.onBuildWireDrag?.({id:drag.id,end:drag.end,phase:e.type==='pointerup'?'end':'cancel',anchor:drag.target||null});renderer.domElement.style.cursor='grab';return;}
       if(buildDrag?.started){const drag=buildDrag;buildDrag=null;pointerDown=null;callbacks.onBuildDrag?.({kind:drag.kind,phase:e.type==='pointerup'?'end':'cancel',anchor:drag.target||null});renderer.domElement.style.cursor='grab';return;}
       buildDrag=null;
       const clicked=e.type==='pointerup'&&!pointerDown.moved;
-      if(clicked&&gesture&&gesture.kind!=='hold')tapAction(gesture);
+      if(clicked&&pointerDown.ghost)callbacks.onBuildGhost?.(pointerDown.ghost);
+      else if(clicked&&gesture&&gesture.kind!=='hold')tapAction(gesture);
       else if(clicked&&!gesture){
-        if(buildMode){const o=pointerDown.hit?.object;if(o?.userData.buildPart)callbacks.onBuildPart?.(o.userData.buildPart);else if(o?.userData.buildWire)callbacks.onBuildWire?.(o.userData.buildWire);else{const endpoint=buildHit(e,pointerDown.hit);if(endpoint)callbacks.onBuildEndpoint?.(endpoint);}}
+        if(buildMode){const o=pointerDown.hit?.object;if(buildTool==='wire'&&!running){const endpoint=buildHit(e,hit(e,true));if(endpoint)callbacks.onBuildEndpoint?.(endpoint);else if(!buildWirePending&&o?.userData.buildWire)callbacks.onBuildWire?.(o.userData.buildWire);}else if(o?.userData.buildPart)callbacks.onBuildPart?.(o.userData.buildPart);else if(o?.userData.buildWire)callbacks.onBuildWire?.(o.userData.buildWire);else{const endpoint=buildHit(e,pointerDown.hit);if(endpoint)callbacks.onBuildEndpoint?.(endpoint);}}
         else{const part=pointerDown.hit?.object.userData.part;if(part)callbacks.onInspect?.(part);}
       }
       releaseAction();pointerDown=null;
@@ -789,7 +837,7 @@ export function createScene(container, callbacks = {}) {
   function reset(){clearFocus();targetRotation=DEFAULT_YAW;zoomLevel=1;notifyBuildZoom();frameCamera();}
   const coarse=window.matchMedia('(pointer: coarse)').matches;let lastRendered=0;
   function tick(now){if(!alive)return;frame=requestAnimationFrame(tick);if(document.hidden){last=now;return;}const moving=Math.abs(targetRotation-rotation)>.001||pointerDown||transition||now<cameraAnimatingUntil;const fps=running||moving?(coarse?30:60):10;if(now-lastRendered<1000/fps)return;lastRendered=now;const dt=Math.min((now-last)/1000,.15);last=now;elapsed+=dt;
-    rotation+=(targetRotation-rotation)*.15;world.rotation.y=rotation;world.rotation.x=0;animateAssembly(now);frameCamera();
+    if(!buildDragLocksView())rotation+=(targetRotation-rotation)*.15;world.rotation.y=rotation;world.rotation.x=0;animateAssembly(now);frameCamera();
     const normalized=THREE.MathUtils.clamp(value/100,0,1);let brightness=0;
     if(running&&!transition){
       brightness=buildMode?(buildSimulation?.valid===false?0:buildState.project==='blink'?(Math.floor(elapsed*1000/buildState.interval)%2===0?1:0):THREE.MathUtils.clamp(Number(buildSimulation?.ledBrightness)||0,0,1)):lesson==='blink'?(Math.floor(elapsed*1000/(100+normalized*1400))%2===0?1:0):['button','wifi'].includes(lesson)?(pressed?1:0):lesson==='light'?(normalized<1200/4095?1:0):['force','potentiometer'].includes(lesson)?normalized:1;
@@ -817,10 +865,11 @@ export function createScene(container, callbacks = {}) {
   externalSetup('board');resize();if(buildMode)setBuildState(buildState);frame=requestAnimationFrame(tick);callbacks.onReady?.();
   return {
     setLesson:switchLesson,
-    setBuildState,setBuildHighlight,focusBuildTargets,setBuildGhost,projectBuildEndpoint,setBuildInputs,setBuildSimulation,
-    setBuildTool(tool){if(!buildMode||tool===buildTool)return;buildTool=['select','wire','delete','led','resistor','button','potentiometer'].includes(tool)?tool:'select';container.dataset.buildSceneTool=buildTool;cancelBuildDrag();refreshBuildWireMaterials();},
+    setBuildState,setBuildHighlight,focusBuildTargets,setBuildGhost,setBuildSelection,setBuildConnections,projectBuildEndpoint,setBuildInputs,setBuildSimulation,
+    setBuildWirePending(v){if(buildMode)buildWirePending=!!v;},
+    setBuildTool(tool){if(!buildMode||tool===buildTool)return;buildTool=['select','wire','delete','led','resistor','button','potentiometer'].includes(tool)?tool:'select';container.dataset.buildSceneTool=buildTool;cancelBuildDrag();cancelBuildWireDrag();refreshBuildWireMaterials();refreshBuildWireHandles();},
     setBuildZoom(v){if(buildMode)changeZoom(v,false);},getBuildZoom(){return zoomLevel;},
-    setBuildRunning(v){if(!buildMode||running===!!v)return;running=!!v;elapsed=0;if(!running)cancelGesture(true);else setBuildGhost(null);refreshBuildWireMaterials();container.dataset.buildRunning=String(running);},
+    setBuildRunning(v){if(!buildMode||running===!!v)return;running=!!v;elapsed=0;if(!running)cancelGesture(true);else{cancelBuildWireDrag();setBuildGhost(null);}refreshBuildWireMaterials();refreshBuildWireHandles();container.dataset.buildRunning=String(running);},
     setRunning(v){running=!!v;if(!running)cancelGesture(true);elapsed=0;},setValue(v){value=Number(v)||0;},setPressed(v){pressed=!!v;},
     setLabels(v){labelsVisible=!!v;},setFlow(v){flow=buildMode?false:!!v;},focus,clearFocus,reset,
     rotate:turn,zoom(d){if(!buildMode)clearFocus();changeZoom(zoomLevel+d,false);},

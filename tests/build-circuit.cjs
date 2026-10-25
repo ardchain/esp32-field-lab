@@ -432,5 +432,95 @@ const assert=require('node:assert/strict');
     assert.equal(M.resolveWireConnection(s,'pin:23','pin:34').code,'wire_limit');
     assert.equal(M.resolveWireConnection(s,'bb:a1','bb:b1').alreadyConnected,true);
   });
+  test('moving a wire endpoint lifts only that wire and keeps its other endpoint fixed',()=>{
+    const s=screenshotBuild(),before=JSON.stringify(s);
+    assert.deepEqual(M.resolveWireMove(s,'signal','to','bb:a8'),{ok:true,from:'pin:23',to:'bb:a8',redirected:[],unchanged:false});
+    assert.deepEqual(M.resolveWireMove(s,'signal','from','pin:GPIO22'),{ok:true,from:'pin:22',to:'bb:d8',redirected:[],unchanged:false});
+    assert.equal(JSON.stringify(s),before);
+  });
+  test('moving to the same original endpoint is an explicit no-op even on a redundant wire',()=>{
+    const s=screenshotBuild();assert.deepEqual(M.resolveWireMove(s,'signal','from','pin:GPIO23'),{ok:true,from:'pin:23',to:'bb:d8',redirected:[],unchanged:true});
+    s.wires.push(wire('redundant','bb:a20','bb:b20'));
+    assert.equal(M.resolveWireMove(s,'redundant','to','bb:b20').unchanged,true);
+  });
+  test('wire moves redirect occupied component contacts without moving the fixed endpoint',()=>{
+    const s=screenshotBuild(),move=M.resolveWireMove(s,'signal','to','bb:e6');
+    assert.deepEqual(move,{ok:true,from:'pin:23',to:'bb:d6',redirected:[{requested:'bb:e6',endpoint:'bb:d6'}],unchanged:false});
+    const old=s.wires[0],edited={...old,from:move.from,to:move.to};
+    assert.equal(edited.id,old.id);assert.equal(edited.color,old.color);
+    const lifted={...s,wires:s.wires.slice(1)};assert.equal(M.wireIssue(lifted,move.from,move.to),null);
+  });
+  test('wire move checks connectivity without the original wire and rejects other redundant paths',()=>{
+    const s=screenshotBuild();assert.equal(M.resolveWireMove(s,'signal','to','bb:b8').ok,true);
+    assert.equal(M.resolveWireMove(s,'signal','to','pin:23').code,'already_connected');
+    assert.equal(M.resolveWireMove(s,'ground','to','pin:GND2').code,'already_connected');
+    s.wires.push(wire('branch','bb:a8','bb:a9'));
+    assert.equal(M.resolveWireMove(s,'signal','from','bb:b9').code,'already_connected');
+  });
+  test('invalid wire edits return diagnostics and never mutate their source',()=>{
+    const s=screenshotBuild(),before=JSON.stringify(s);
+    assert.equal(M.resolveWireMove(s,'missing','to','bb:a1').code,'wire_not_found');
+    assert.equal(M.resolveWireMove(s,'signal','middle','bb:a1').code,'invalid_wire_end');
+    assert.equal(M.resolveWireMove(s,'signal','to','bb:z1').code,'invalid_endpoint');
+    const full=setup();full.wires=[wire('move','pin:23','bb:a20'),wire('fill1','bb:a6','bb:b6'),wire('fill2','bb:d6','bb:e6')];
+    assert.equal(M.resolveWireMove(full,'move','to','bb:c6').code,'no_free_contact');
+    assert.equal(JSON.stringify(s),before);
+  });
+  test('wire moves use a released original hole and still work at the wire limit',()=>{
+    const s=screenshotBuild();
+    const move=M.resolveWireMove(s,'signal','to','bb:c8');assert.equal(move.ok,true);assert.equal(move.to,'bb:b8');
+    const max=M.initialState();
+    for(let row=1;row<=30;row++)for(const cols of ['ab','cd'])max.wires.push(wire(cols+row,`bb:${cols[0]}${row}`,`bb:${cols[1]}${row}`));
+    const result=M.resolveWireMove(max,'ab1','from','pin:23');assert.equal(result.ok,true);assert.equal(result.to,'bb:b1');
+    assert.equal(max.wires.length,60);
+  });
+  test('electricallyConnected follows copper, jumpers and permanent pairs only',()=>{
+    const s=projectSetup('button');s.wires=[wire('gnd','pin:GND','rail:L+:8')];
+    for(const pair of [['bb:a2','bb:e2'],['pin:GND2','rail:L+:25'],['bb:d16','bb:d18']])assert.equal(M.electricallyConnected(s,...pair),true);
+    for(const pair of [['bb:e2','bb:f2'],['bb:e9','bb:e10'],['bb:c6','bb:c9'],['bb:d16','bb:f16'],['rail:L+:1','rail:R+:1']])assert.equal(M.electricallyConnected(s,...pair),false);
+    const pot=projectSetup('potentiometer');assert.equal(M.electricallyConnected(pot,'bb:h18','bb:h19'),false);
+    assert.equal(M.electricallyConnected(null,'bb:a1','bb:a1'),false);assert.equal(M.electricallyConnected(s,'pin:999','bb:a1'),false);
+  });
+  const bypassBuild=()=>({...setup({a:'bb:e5',b:'bb:e6'},{a:'bb:e7',b:'bb:e10',ohms:330}),
+    wires:[wire('signal','pin:23','bb:b5'),wire('ground','bb:a6','pin:GND')]});
+  const applyRepair=(state,plan)=>{
+    const trial=clone(state);
+    for(const [i,operation] of plan.operations.entries()){
+      if(operation.kind==='moveWire'){
+        const resolved=M.resolveWireMove(trial,operation.wireId,operation.end,operation.target);assert.equal(resolved.ok,true);
+        assert.equal(resolved.from,operation.from);assert.equal(resolved.to,operation.to);
+        Object.assign(trial.wires.find(w=>w.id===operation.wireId),{from:resolved.from,to:resolved.to});
+      }else{
+        assert.equal(M.wireIssue(trial,operation.from,operation.to),null);
+        trial.wires.push(wire('repair-test-'+i,operation.from,operation.to));
+      }
+    }
+    return trial;
+  };
+  test('direct LED bypass gets concrete source-wire move and resistor-to-LED steps',()=>{
+    const s=bypassBuild(),before=JSON.stringify(s);verdict(s,'missing_current_limit');
+    const plan=M.repairPlan(s);assert.ok(plan);assert.equal(plan.operations.length,2);
+    const [move,connect]=plan.operations;assert.equal(move.kind,'moveWire');assert.equal(move.wireId,'signal');assert.equal(move.end,'to');
+    assert.equal(move.from,'pin:23');assert.equal(move.to,'bb:d7');assert.equal(move.target,'bb:d7');assert.ok(move.targets.includes('bb:b5'));
+    assert.equal(connect.kind,'connect');assert.equal(M.netOf(connect.from),'strip:L:10');assert.equal(M.netOf(connect.to),'strip:L:5');
+    assert.match(move.title,/B5.*D7/);assert.match(connect.why,/long \(\+\) lead/);
+    assert.equal(JSON.stringify(s),before);const repaired=applyRepair(s,plan);verdict(repaired,'complete');
+    assert.equal(repaired.wires[0].id,s.wires[0].id);assert.equal(repaired.wires[0].color,s.wires[0].color);
+  });
+  test('bypass repair accepts reversed wire direction, either breadboard half and shifted layouts',()=>{
+    for(const half of [['e','b','a'],['j','g','f']])for(const row of [2,8,16]){
+      const s=setup({a:`bb:${half[0]}${row}`,b:`bb:${half[0]}${row+1}`},{a:`bb:${half[0]}${row+2}`,b:`bb:${half[0]}${row+5}`,ohms:330});
+      s.wires=[wire('signal',`bb:${half[1]}${row}`,'pin:23'),wire('ground','pin:GND2',`bb:${half[2]}${row+1}`)];
+      const plan=M.repairPlan(s);assert.ok(plan);assert.equal(plan.operations[0].end,'from');verdict(applyRepair(s,plan),'complete');
+    }
+  });
+  test('bypass repair only proposes a fully validated final circuit and never guesses other repairs',()=>{
+    for(const s of [null,M.initialState(),valid()])assert.equal(M.repairPlan(s),null);
+    const reversed=bypassBuild();[reversed.parts.led.a,reversed.parts.led.b]=[reversed.parts.led.b,reversed.parts.led.a];assert.equal(M.repairPlan(reversed),null);
+    const power=bypassBuild();power.wires[0].from='pin:3V3';assert.equal(M.repairPlan(power),null);
+    const extra=bypassBuild();extra.wires.push(wire('power','pin:3V3','bb:a7'));assert.equal(M.repairPlan(extra),null);
+    const shorted=bypassBuild();shorted.wires.push(wire('short','bb:a7','bb:a10'));assert.equal(M.repairPlan(shorted),null);
+    const twoPaths=bypassBuild();twoPaths.wires.push(wire('duplicate-path','pin:22','bb:c5'));assert.equal(M.repairPlan(twoPaths),null);
+  });
   console.log(JSON.stringify({result:'passed',tests:passed}));
 })().catch(error=>{console.error(error);process.exitCode=1;});

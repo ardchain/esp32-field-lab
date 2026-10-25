@@ -227,6 +227,33 @@ export function resolveWireConnection(state,requestedFrom,requestedTo) {
     redirected:[first,second].filter(result=>result.redirected).map(({requested,endpoint})=>({requested,endpoint}))};
 }
 
+// Preview an endpoint edit with the old wire lifted out of the circuit. Its
+// opposite end stays in the exact same hole; callers retain the wire ID/color.
+export function resolveWireMove(state,wireId,end,target) {
+  if(!['from','to'].includes(end))return diagnostic('invalid_wire_end','Choose a wire end','Move the start or end of an existing wire.');
+  const requested=canonicalEndpoint(target);
+  if(!requested)return diagnostic('invalid_endpoint','Choose a contact','Select a board pin, breadboard hole or rail contact.');
+  const bad=validInput(state);if(bad)return bad;
+  const wire=state.wires.find(w=>w.id===wireId);
+  if(!wire)return diagnostic('wire_not_found','Select an existing wire','That wire is no longer in this build.');
+  const original={from:canonicalEndpoint(wire.from),to:canonicalEndpoint(wire.to)};
+  if(requested===original[end])return {ok:true,...original,redirected:[],unchanged:true};
+  const lifted={...state,wires:state.wires.filter(w=>w.id!==wireId)},fixed=original[end==='from'?'to':'from'];
+  const context=wireResolutionContext(lifted);
+  if(context.uf.find(requested)===context.uf.find(fixed))return diagnostic('already_connected','These contacts are already connected',
+    'Choose a contact on a different connection. This move would add a wire across an existing connection.',[fixed,requested]);
+  const resolved=resolveInContext(context,requested,[fixed]);if(!resolved.ok)return resolved;
+  const actual={...original,[end]:resolved.endpoint},issue=wireIssue(lifted,actual.from,actual.to);if(issue)return issue;
+  return {ok:true,...actual,redirected:resolved.redirected?[{requested,endpoint:resolved.endpoint}]:[],
+    unchanged:actual.from===original.from&&actual.to===original.to};
+}
+
+export function electricallyConnected(state,a,b) {
+  a=canonicalEndpoint(a);b=canonicalEndpoint(b);
+  if(!a||!b||validInput(state))return false;
+  const uf=buildNets(state);return uf.find(a)===uf.find(b);
+}
+
 // Restoring storage never trusts arbitrary object keys, HTML, colors or IDs.
 // Invalid parts/wires are discarded; validation below never silently repairs its input.
 export function normalizeState(raw) {
@@ -446,6 +473,45 @@ export function connectionPlan(state){
       trial.wires.push({id,from,to,color:WIRE_COLORS[0]});planned.push({from,to});uf.join(from,to);
     }
     if(!failed&&validateCircuit(trial).ok&&(!best||planned.length<best.length))best=planned;
+  }
+  return best;
+}
+
+// A bounded repair for an LED driven directly from GPIO23: move one source-wire
+// end onto the resistor, then add the missing connections. Every proposed final
+// circuit is checked; unsupported faults receive no guessed or automatic edit.
+export function repairPlan(state){
+  if(validateCircuit(state).code!=='missing_current_limit')return null;
+  const {led,resistor}=state.parts,uf=buildNets(state),root=id=>uf.find(canonicalEndpoint(id));
+  if(root(led.a)!==root('pin:23')||root(led.b)!==root('pin:GND'))return null;
+  let best=null;
+  for(const wire of state.wires)for(const end of ['to','from']){
+    const old=canonicalEndpoint(wire[end]),fixed=canonicalEndpoint(wire[end==='from'?'to':'from']);
+    if(parseEndpoint(old).kind==='pin')continue;
+    const lifted={...state,wires:state.wires.filter(w=>w.id!==wire.id)},nets=buildNets(lifted),net=id=>nets.find(canonicalEndpoint(id));
+    if(net(fixed)!==net('pin:23')||net(old)!==net(led.a)||net(led.a)===net('pin:23'))continue;
+    for(const target of [resistor.a,resistor.b]){
+      const move=resolveWireMove(state,wire.id,end,target);if(!move.ok||move.unchanged)continue;
+      const trial=structuredClone(state),edited=trial.wires.find(w=>w.id===wire.id);
+      edited.from=move.from;edited.to=move.to;
+      const connections=connectionPlan(trial);if(!connections)continue;
+      const actual=move[end],operations=[{kind:'moveWire',wireId:wire.id,end,target:actual,from:move.from,to:move.to,
+        title:`Move the wire end from ${endpointLabel(old)} to ${endpointLabel(actual)}`,
+        why:`Keep ${endpointLabel(fixed)} connected. ${endpointLabel(actual)} connects it to the resistor lead at ${endpointLabel(target)}.`,
+        targets:[...new Set([old,actual,fixed,canonicalEndpoint(target)])]}];
+      for(const connection of connections){
+        const current=buildNets(trial),isAnode=id=>current.find(id)===current.find(canonicalEndpoint(led.a));
+        operations.push({kind:'connect',...connection,
+          title:`Connect ${endpointLabel(connection.from)} to ${endpointLabel(connection.to)}`,
+          why:isAnode(connection.from)||isAnode(connection.to)?'Join the resistor to the LED’s long (+) lead so LED current passes through the resistor.':'Complete this connection in the project circuit.',
+          targets:[connection.from,connection.to]});
+        let id='repair-wire';while(trial.wires.some(w=>w.id===id))id+='x';
+        trial.wires.push({id,...connection,color:WIRE_COLORS[0]});
+      }
+      if(validateCircuit(trial).ok&&(!best||operations.length<best.operations.length))best={
+        title:'Put the resistor in the LED path',
+        why:'GPIO23 currently reaches the LED directly. Route it through the resistor first to limit LED current.',operations};
+    }
   }
   return best;
 }
